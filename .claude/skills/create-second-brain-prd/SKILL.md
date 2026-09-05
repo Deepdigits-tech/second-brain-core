@@ -34,6 +34,27 @@ Safe defaults when an answer is blank: proactivity "watchful", active hours 7:00
 to 21:00 in the given timezone, notifications to the first configured chat
 platform, laptop-only infrastructure, no paid model API.
 
+## The shipped code is the starting point
+
+This skill lives inside a working system. The plan must build on it, not describe
+it again for someone to rewrite:
+
+- Phases 1 to 8 map onto code that already exists in this repository. For each,
+  name the shipped file (for example `.claude/scripts/heartbeat.py`,
+  `.claude/scripts/memory_reflect.py`, `.claude/hooks/block-secrets.py`) and say
+  what to configure or extend in it. "Write a heartbeat" is wrong; "set these
+  variables, add this lane inside the feature wrapper, keep the gather, diff,
+  guardrail, agent, notify order" is right.
+- New code is written only for a job in section 3 that no shipped file does. Say
+  so explicitly in that phase: "new, because nothing shipped does X".
+- Every phase's Test step includes running the shipped suite,
+  `.venv/bin/python3 -m pytest -q`, and states that the pass count must not drop
+  below what it was before the phase. A green suite is the proof the mechanism
+  still works; a description of the mechanism is not.
+- If a requirement would need changing a security file (the hooks, the sanitizer,
+  the guardrail), the plan says which test in `tests/` covers it and adds a test
+  for the change first.
+
 ## Plan shape
 
 Write it with these sections, in this order. Every phase must be buildable and
@@ -60,7 +81,9 @@ testable on its own, and phase one must be usable by itself.
 Each phase has exactly these headings:
 
 - **Delivers**: one sentence the owner can check.
-- **Files**: exact paths to create or change.
+- **Reuses**: the shipped files this phase configures or extends, by path.
+- **Files**: exact paths to create or change. New files are the exception and
+  say why.
 - **Build**: numbered steps. Name the functions, the env variables, and the
   file formats. Where the reference gives a mechanism (state diffing, the
   guardrail order, the index-plus-pages layout, the three-file page threshold,
