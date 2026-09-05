@@ -1,0 +1,10 @@
+# Paired with {{REPO_ROOT}}/.claude/systemd/cortexos-indexer.service
+[Unit]
+Description=Cortex OS Memory Indexer Timer (every 15 min)
+
+[Timer]
+OnCalendar=*:00/15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

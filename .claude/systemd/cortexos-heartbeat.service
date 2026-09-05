@@ -1,0 +1,13 @@
+[Unit]
+Description=Cortex OS Heartbeat (one-shot)
+
+[Service]
+Type=oneshot
+User={{USER}}
+WorkingDirectory={{REPO_ROOT}}
+ExecStart={{PYTHON}} {{REPO_ROOT}}/.claude/scripts/heartbeat.py
+Environment=PATH={{PATH}}
+EnvironmentFile={{ENV_FILE}}
+Environment=CLAUDE_INVOKED_BY=heartbeat
+StandardOutput=journal
+StandardError=journal

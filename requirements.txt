@@ -1,0 +1,10 @@
+claude-agent-sdk
+openai
+fastembed
+sqlite-vec
+python-telegram-bot
+slack-sdk
+pyyaml
+python-dotenv
+composio==0.11.5
+pytest

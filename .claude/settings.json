@@ -1,0 +1,60 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'P=\"$CLAUDE_PROJECT_DIR/.venv/bin/python3\"; [ -x \"$P\" ] || P=\"$(command -v python3)\"; exec \"$P\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start-context.py\" \"$@\"' --",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'P=\"$CLAUDE_PROJECT_DIR/.venv/bin/python3\"; [ -x \"$P\" ] || P=\"$(command -v python3)\"; exec \"$P\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-compact-flush.py\" \"$@\"' --",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'P=\"$CLAUDE_PROJECT_DIR/.venv/bin/python3\"; [ -x \"$P\" ] || P=\"$(command -v python3)\"; exec \"$P\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-soul-edit.py\" \"$@\"' --",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Bash|Grep|Edit|Write|Glob|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'P=\"$CLAUDE_PROJECT_DIR/.venv/bin/python3\"; [ -x \"$P\" ] || P=\"$(command -v python3)\"; exec \"$P\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-secrets.py\" \"$@\"' --",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh -c 'P=\"$CLAUDE_PROJECT_DIR/.venv/bin/python3\"; [ -x \"$P\" ] || P=\"$(command -v python3)\"; exec \"$P\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-end-flush.py\" \"$@\"' --",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

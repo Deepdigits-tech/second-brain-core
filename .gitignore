@@ -1,0 +1,29 @@
+.DS_Store
+*.pyc
+__pycache__/
+.env
+.env.*
+!.env.example
+master.env
+!master.env.example
+node_modules/
+.venv/
+
+# Machine-local state and databases — rebuilt on each machine, never synced.
+.claude/data/state/*.json
+.claude/data/memory.db
+.claude/data/memory.db-*
+.claude/data/chat.db
+.claude/data/chat-server.pid
+.claude/data/sender_reputation.db
+.claude/data/sender_reputation.db-*
+.claude/data/heartbeat_errors.log
+.claude/data/reflect_errors.log
+.claude/data/hygiene_errors.log
+.claude/data/feature-timings.jsonl
+.claude/data/hook-blocks.jsonl
+.claude/data/sdk_stderr.log
+
+# Vault: personal content, never shipped as part of this template repo.
+vault/daily/
+vault/research/

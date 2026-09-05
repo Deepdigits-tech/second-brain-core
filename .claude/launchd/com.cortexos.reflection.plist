@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cortexos.reflection</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PYTHON}}</string>
+        <string>{{REPO_ROOT}}/.claude/scripts/memory_reflect.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{REPO_ROOT}}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{{PATH}}</string>
+    </dict>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>{{LOG_DIR}}/cortexos-reflection-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{LOG_DIR}}/cortexos-reflection-stderr.log</string>
+</dict>
+</plist>

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cortexos.indexer</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{PYTHON}}</string>
+        <string>{{REPO_ROOT}}/.claude/scripts/memory_index.py</string>
+        <string>--incremental</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>{{REPO_ROOT}}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>{{PATH}}</string>
+    </dict>
+    <key>StartInterval</key>
+    <integer>900</integer>
+    <key>StandardOutPath</key>
+    <string>{{LOG_DIR}}/cortexos-indexer-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{{LOG_DIR}}/cortexos-indexer-stderr.log</string>
+</dict>
+</plist>

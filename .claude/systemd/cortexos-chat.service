@@ -1,0 +1,20 @@
+[Unit]
+Description=Cortex OS Chat Server (Slack/Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{USER}}
+WorkingDirectory={{REPO_ROOT}}
+ExecStart={{PYTHON}} {{REPO_ROOT}}/.claude/chat/server.py
+Restart=always
+RestartSec=10
+Environment=PATH={{PATH}}
+EnvironmentFile={{ENV_FILE}}
+Environment=CLAUDE_INVOKED_BY=chat_server
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

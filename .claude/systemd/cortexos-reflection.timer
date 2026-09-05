@@ -1,0 +1,10 @@
+# Paired with {{REPO_ROOT}}/.claude/systemd/cortexos-reflection.service
+[Unit]
+Description=Cortex OS Daily Reflection Timer (8 AM PST)
+
+[Timer]
+OnCalendar=*-*-* 15:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

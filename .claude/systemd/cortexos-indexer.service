@@ -1,0 +1,17 @@
+[Unit]
+Description=Cortex OS Memory Indexer (one-shot)
+
+[Service]
+Type=oneshot
+User={{USER}}
+WorkingDirectory={{REPO_ROOT}}
+ExecStart={{PYTHON}} {{REPO_ROOT}}/.claude/scripts/memory_index.py --incremental
+Environment=HOME={{HOME}}
+Environment=PATH={{PATH}}
+# No EnvironmentFile on purpose: indexing runs entirely on-box (the embedding
+# model is local), so this unit never needs any API credentials.
+# The first run after a chunker or fingerprint change rebuilds the whole index,
+# which is far slower here than on the Mac — hence the hour.
+TimeoutStartSec=3600
+StandardOutput=journal
+StandardError=journal

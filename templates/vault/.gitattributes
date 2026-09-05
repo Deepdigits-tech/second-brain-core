@@ -1,0 +1,2 @@
+daily/*.md merge=union
+MEMORY.md merge=union
