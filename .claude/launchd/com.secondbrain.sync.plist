@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cortexos.reflection</string>
+    <string>com.secondbrain.sync</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{{PYTHON}}</string>
-        <string>{{REPO_ROOT}}/.claude/scripts/memory_reflect.py</string>
+        <string>/bin/bash</string>
+        <string>{{REPO_ROOT}}/.claude/scripts/vault_sync.sh</string>
     </array>
     <key>WorkingDirectory</key>
     <string>{{REPO_ROOT}}</string>
@@ -16,16 +16,11 @@
         <key>PATH</key>
         <string>{{PATH}}</string>
     </dict>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>8</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <key>StartInterval</key>
+    <integer>120</integer>
     <key>StandardOutPath</key>
-    <string>{{LOG_DIR}}/cortexos-reflection-stdout.log</string>
+    <string>{{LOG_DIR}}/secondbrain-sync-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>{{LOG_DIR}}/cortexos-reflection-stderr.log</string>
+    <string>{{LOG_DIR}}/secondbrain-sync-stderr.log</string>
 </dict>
 </plist>

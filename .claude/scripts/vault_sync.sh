@@ -5,7 +5,7 @@ set -uo pipefail
 # Derive repo root from this script's location (.claude/scripts/vault_sync.sh → repo root)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-LOG="/tmp/cortexos-sync.log"
+LOG="/tmp/secondbrain-sync.log"
 
 # Paths auto-sync will NOT commit. Source code needs an explicit commit with a
 # real message; everything else (vault, .agents, skills, tracked state) syncs
@@ -256,14 +256,14 @@ clear_failures
 # The always-on Python process holds stale module state after git pull;
 # systemd timers (heartbeat, reflection) spawn fresh processes each run,
 # so only the chat server needs this. Sudoers rule:
-#   /etc/sudoers.d/cortexos-chat-restart permits cortexos to restart it.
+#   /etc/sudoers.d/secondbrain-chat-restart permits the service user to restart it.
 if [ "$(uname)" = "Linux" ] && [ -n "$PRE_PULL_HEAD" ]; then
     POST_PULL_HEAD="$(git rev-parse HEAD 2>/dev/null || echo '')"
     if [ -n "$POST_PULL_HEAD" ] && [ "$PRE_PULL_HEAD" != "$POST_PULL_HEAD" ]; then
         CHANGED="$(git diff --name-only "$PRE_PULL_HEAD" "$POST_PULL_HEAD" 2>/dev/null || echo '')"
         if echo "$CHANGED" | grep -qE '^\.claude/(chat/|scripts/tasks\.py|scripts/integrations/)'; then
-            log "chat code changed, restarting cortexos-chat"
-            sudo -n /usr/bin/systemctl restart cortexos-chat 2>>"$LOG" || log "WARN: chat restart failed"
+            log "chat code changed, restarting secondbrain-chat"
+            sudo -n /usr/bin/systemctl restart secondbrain-chat 2>>"$LOG" || log "WARN: chat restart failed"
         fi
     fi
 fi

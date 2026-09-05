@@ -1,4 +1,4 @@
-# Paired with {{REPO_ROOT}}/.claude/systemd/cortexos-indexer.service
+# Paired with {{REPO_ROOT}}/.claude/systemd/secondbrain-indexer.service
 [Unit]
 Description=Cortex OS Memory Indexer Timer (every 15 min)
 

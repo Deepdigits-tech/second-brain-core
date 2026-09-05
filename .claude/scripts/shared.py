@@ -402,7 +402,7 @@ def vps_ssh_alias() -> str:
 
 
 def vps_repo_root() -> str:
-    """Absolute path to the cortexos checkout on the VPS, from CORTEX_VPS_REPO_ROOT.
+    """Absolute path to the repository checkout on the VPS, from CORTEX_VPS_REPO_ROOT.
 
     Unset -> "".
     """
@@ -410,7 +410,7 @@ def vps_repo_root() -> str:
 
 
 def vps_user() -> str:
-    """The non-root service user cortexos runs as on the VPS, from CORTEX_VPS_USER.
+    """The non-root service user the automation runs as on the VPS, from CORTEX_VPS_USER.
 
     Unset -> "".
     """

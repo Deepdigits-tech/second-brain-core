@@ -3,11 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cortexos.sync</string>
+    <string>com.secondbrain.indexer</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
-        <string>{{REPO_ROOT}}/.claude/scripts/vault_sync.sh</string>
+        <string>{{PYTHON}}</string>
+        <string>{{REPO_ROOT}}/.claude/scripts/memory_index.py</string>
+        <string>--incremental</string>
     </array>
     <key>WorkingDirectory</key>
     <string>{{REPO_ROOT}}</string>
@@ -17,10 +18,10 @@
         <string>{{PATH}}</string>
     </dict>
     <key>StartInterval</key>
-    <integer>120</integer>
+    <integer>900</integer>
     <key>StandardOutPath</key>
-    <string>{{LOG_DIR}}/cortexos-sync-stdout.log</string>
+    <string>{{LOG_DIR}}/secondbrain-indexer-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>{{LOG_DIR}}/cortexos-sync-stderr.log</string>
+    <string>{{LOG_DIR}}/secondbrain-indexer-stderr.log</string>
 </dict>
 </plist>

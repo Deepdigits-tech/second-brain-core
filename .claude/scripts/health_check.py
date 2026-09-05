@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / ".claude" / "data"
 STATE_DIR = DATA_DIR / "state"
 HEARTBEAT_STATE = STATE_DIR / "heartbeat-state.json"
-SYNC_LOG = Path("/tmp/cortexos-sync.log")
+SYNC_LOG = Path("/tmp/secondbrain-sync.log")
 HEALTH_STATE = STATE_DIR / "health-state.json"
 
 import shared
@@ -35,10 +35,10 @@ IS_MAC = platform.system() == "Darwin"
 IS_LINUX = platform.system() == "Linux"
 
 EXPECTED_LAUNCHD_AGENTS = [
-    "com.cortexos.heartbeat",
-    "com.cortexos.sync",
-    "com.cortexos.indexer",
-    "com.cortexos.reflection",
+    "com.secondbrain.heartbeat",
+    "com.secondbrain.sync",
+    "com.secondbrain.indexer",
+    "com.secondbrain.reflection",
 ]
 
 SSH_TIMEOUT = 15  # seconds
@@ -99,11 +99,11 @@ def check_local_duplicate() -> dict:
         return _warn("could not check local processes")
 
 
-SYNC_LOG = Path("/tmp/cortexos-sync.log")
+SYNC_LOG = Path("/tmp/secondbrain-sync.log")
 
 
 def _last_consecutive_failure_count() -> int:
-    """Read /tmp/cortexos-sync.log and return the consecutive-failure count
+    """Read /tmp/secondbrain-sync.log and return the consecutive-failure count
     from the most recent line. Zero if the log doesn't exist, can't be read,
     or the most recent run succeeded."""
     if not SYNC_LOG.exists():
@@ -134,7 +134,7 @@ def check_sync_drift() -> dict:
     """Health of the auto-sync between Mac and VPS.
 
     Two layers:
-    1. Read /tmp/cortexos-sync.log for consecutive-failure count. This is
+    1. Read /tmp/secondbrain-sync.log for consecutive-failure count. This is
        the *cause* — if sync isn't running, drift is just a symptom.
     2. Fall back to git rev-list drift if the log is unavailable.
     """
@@ -229,7 +229,7 @@ def check_sync_log_freshness() -> dict:
     if not IS_MAC:
         return _ok("skipped (not on Mac — VPS uses cron)")
     if not SYNC_LOG.exists():
-        return _warn("sync log missing (/tmp/cortexos-sync.log)")
+        return _warn("sync log missing (/tmp/secondbrain-sync.log)")
     try:
         mtime = SYNC_LOG.stat().st_mtime
         age_min = (time.time() - mtime) / 60
@@ -249,11 +249,11 @@ def check_sync_log_freshness() -> dict:
 def check_vps_chat_server() -> dict:
     """Check if VPS chat server systemd service is active."""
     try:
-        result = _ssh("systemctl is-active cortexos-chat")
+        result = _ssh("systemctl is-active secondbrain-chat")
         status = result.stdout.strip()
         if status == "active":
-            return _ok("cortexos-chat active")
-        return _critical(f"cortexos-chat status: {status}")
+            return _ok("secondbrain-chat active")
+        return _critical(f"secondbrain-chat status: {status}")
     except subprocess.TimeoutExpired:
         return _critical("SSH to VPS timed out")
     except Exception as e:
@@ -263,7 +263,7 @@ def check_vps_chat_server() -> dict:
 def check_vps_telegram_health() -> dict:
     """Scan recent VPS chat logs for Telegram 409 Conflict errors."""
     try:
-        result = _ssh("journalctl -u cortexos-chat --no-pager --since '30 min ago' 2>&1 | grep -c '409 Conflict' || true")
+        result = _ssh("journalctl -u secondbrain-chat --no-pager --since '30 min ago' 2>&1 | grep -c '409 Conflict' || true")
         count = int(result.stdout.strip() or "0")
         if count > 0:
             return _critical(f"{count} Telegram 409 Conflict errors in last 30 min")
@@ -411,7 +411,7 @@ def _check_capture_auth_errors() -> dict:
 def check_vps_sync_cron() -> dict:
     """Verify VPS cron entry for vault sync exists."""
     try:
-        result = _ssh("crontab -l -u cortexos 2>&1")
+        result = _ssh(f"crontab -l -u {shared.vps_user()} 2>&1")
         if "vault_sync" in result.stdout:
             return _ok("VPS sync cron present")
         return _critical("VPS sync cron missing")
@@ -431,9 +431,9 @@ def check_local_launchd() -> dict:
         missing = []
         for agent in EXPECTED_LAUNCHD_AGENTS:
             if agent in result.stdout:
-                loaded.append(agent.replace("com.cortexos.", ""))
+                loaded.append(agent.replace("com.secondbrain.", ""))
             else:
-                missing.append(agent.replace("com.cortexos.", ""))
+                missing.append(agent.replace("com.secondbrain.", ""))
 
         if missing:
             return _critical(f"launchd agents missing: {', '.join(missing)}")

@@ -89,7 +89,7 @@ BLOCKED_BASH_PATTERNS = [
     # Deleting or emptying the vault or the system state, from any path shape.
     # The three patterns above only ever covered `rm -rf` against /, ~ and .,
     # so on 2026-08-17 the chat bot ran
-    #     rm /path/to/cortexos/vault/drafts/active/*.md
+    #     rm /path/to/second-brain/vault/drafts/active/*.md
     # and the hook allowed it. The owner had asked for that one, so nothing was
     # lost — but the bot runs unattended with permissions bypassed, and the
     # next such command need not be one he asked for. Deletion in the vault

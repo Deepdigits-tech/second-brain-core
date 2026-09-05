@@ -1,4 +1,4 @@
-# Paired with {{REPO_ROOT}}/.claude/systemd/cortexos-reflection.service
+# Paired with {{REPO_ROOT}}/.claude/systemd/secondbrain-reflection.service
 [Unit]
 Description=Cortex OS Daily Reflection Timer (8 AM PST)
 

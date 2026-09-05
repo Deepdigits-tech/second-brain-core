@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cortexos.hygiene</string>
+    <string>com.secondbrain.heartbeat</string>
     <key>ProgramArguments</key>
     <array>
         <string>{{PYTHON}}</string>
-        <string>{{REPO_ROOT}}/.claude/scripts/hygiene.py</string>
+        <string>{{REPO_ROOT}}/.claude/scripts/heartbeat.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>{{REPO_ROOT}}</string>
@@ -16,18 +16,11 @@
         <key>PATH</key>
         <string>{{PATH}}</string>
     </dict>
-    <key>StartCalendarInterval</key>
-    <dict>
-        <key>Weekday</key>
-        <integer>0</integer>
-        <key>Hour</key>
-        <integer>8</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <key>StartInterval</key>
+    <integer>1800</integer>
     <key>StandardOutPath</key>
-    <string>{{LOG_DIR}}/cortexos-hygiene-stdout.log</string>
+    <string>{{LOG_DIR}}/secondbrain-heartbeat-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>{{LOG_DIR}}/cortexos-hygiene-stderr.log</string>
+    <string>{{LOG_DIR}}/secondbrain-heartbeat-stderr.log</string>
 </dict>
 </plist>

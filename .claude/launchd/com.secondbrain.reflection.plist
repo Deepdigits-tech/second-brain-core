@@ -3,12 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.cortexos.indexer</string>
+    <string>com.secondbrain.reflection</string>
     <key>ProgramArguments</key>
     <array>
         <string>{{PYTHON}}</string>
-        <string>{{REPO_ROOT}}/.claude/scripts/memory_index.py</string>
-        <string>--incremental</string>
+        <string>{{REPO_ROOT}}/.claude/scripts/memory_reflect.py</string>
     </array>
     <key>WorkingDirectory</key>
     <string>{{REPO_ROOT}}</string>
@@ -17,11 +16,16 @@
         <key>PATH</key>
         <string>{{PATH}}</string>
     </dict>
-    <key>StartInterval</key>
-    <integer>900</integer>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>8</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
     <key>StandardOutPath</key>
-    <string>{{LOG_DIR}}/cortexos-indexer-stdout.log</string>
+    <string>{{LOG_DIR}}/secondbrain-reflection-stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>{{LOG_DIR}}/cortexos-indexer-stderr.log</string>
+    <string>{{LOG_DIR}}/secondbrain-reflection-stderr.log</string>
 </dict>
 </plist>

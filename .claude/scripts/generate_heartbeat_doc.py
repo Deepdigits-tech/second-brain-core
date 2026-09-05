@@ -239,11 +239,11 @@ def render_doc(toggles: dict[str, bool], consts: dict) -> str:
         "",
         "## Launchd",
         "",
-        "- **Mac:** `~/Library/LaunchAgents/com.cortexos.heartbeat.plist`",
-        "  - Load: `launchctl load ~/Library/LaunchAgents/com.cortexos.heartbeat.plist`",
-        "  - Unload: `launchctl unload ~/Library/LaunchAgents/com.cortexos.heartbeat.plist`",
-        "- **VPS:** `systemctl status cortexos-heartbeat.timer`",
-        "  - Restart: `systemctl restart cortexos-heartbeat.timer`",
+        "- **Mac:** `~/Library/LaunchAgents/com.secondbrain.heartbeat.plist`",
+        "  - Load: `launchctl load ~/Library/LaunchAgents/com.secondbrain.heartbeat.plist`",
+        "  - Unload: `launchctl unload ~/Library/LaunchAgents/com.secondbrain.heartbeat.plist`",
+        "- **VPS:** `systemctl status secondbrain-heartbeat.timer`",
+        "  - Restart: `systemctl restart secondbrain-heartbeat.timer`",
     ]
 
     return "\n".join(lines) + "\n"

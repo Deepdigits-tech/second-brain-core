@@ -31,12 +31,12 @@ PLACEHOLDER_RE = re.compile(r"\{\{[A-Z_]+\}\}")
 
 # Labels that are tracked as templates but never installed by default.
 # label -> reason
-DISABLED_UNITS = {
-    "com.cortexos.reputation-audit": "disabled by default; enable after inbox triage is turned on",
+DISABLED_UNITS: dict[str, str] = {
+    # "com.secondbrain.example": "why it is tracked but not installed",
 }
 
 # Labels that used to be installed but are retired: `install` removes them.
-RETIRED_LABELS = {"com.cortexos.reminder-6pm"}
+RETIRED_LABELS: set[str] = set()  # e.g. {"com.secondbrain.old-job"}
 
 
 class TemplateError(Exception):
@@ -165,7 +165,7 @@ def install(
             # A dry run must never touch the live agents dir. With no
             # explicit --out, render into a scratch tempdir instead — the
             # point of --dry-run is to preview without writing anything real.
-            out_dir = Path(tempfile.mkdtemp(prefix="cortexos-install-units-dryrun-"))
+            out_dir = Path(tempfile.mkdtemp(prefix="secondbrain-install-units-dryrun-"))
         else:
             out_dir = launchd_agents_dir()
         written = render("launchd", repo_root, out_dir, user=user)
@@ -197,7 +197,7 @@ def install(
             print(f"rendered {path}")
         names = " ".join(p.name for p in written)
         timers_services = " ".join(
-            p.name for p in written if p.suffix == ".timer" or p.name == "cortexos-chat.service"
+            p.name for p in written if p.suffix == ".timer" or p.name == "secondbrain-chat.service"
         )
         print(
             f"sudo cp {out_dir}/*.service {out_dir}/*.timer /etc/systemd/system/ "
@@ -248,7 +248,7 @@ def diff(platform: str, repo_root: Path, user: str | None = None) -> dict:
                 report[label] = "differs"
 
         if installed_dir.exists():
-            for path in installed_dir.glob("com.cortexos.*.plist"):
+            for path in installed_dir.glob("com.secondbrain.*.plist"):
                 label = path.stem
                 if label in RETIRED_LABELS:
                     report[label] = "retired"
