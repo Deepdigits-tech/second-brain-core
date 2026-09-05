@@ -1,116 +1,82 @@
-# My Second Brain - Requirements Template
+# Second Brain Requirements
 
-> Fill this out during the workshop (Section 1.4). Your answers feed directly into the `/create-second-brain-prd <path to this file>` command, which generates your personalized build plan.
+Fill this in, then run `/create-second-brain-prd ./my-second-brain-requirements.md`.
+Short answers are fine. Blank answers are fine too; the skill will ask, or pick the
+safe default and say so. Do not put passwords, keys, or account numbers in here.
 
----
+## 1. About you
 
-## 1. About You
+- Name the assistant should use for you:
+- Timezone (IANA name, e.g. `Europe/Berlin`):
+- What you do, in one or two sentences:
+- The two or three things you are working on right now:
+- How you like to be spoken to (blunt, warm, brief, detailed, no jokes, etc.):
 
-- **Name:** ___
-- **Role/Title:** ___
-- **What I do daily** (1-2 sentences): ___
-- **Timezone:** ___
-- **Memory vault folder name:** ___ (e.g., "SecondBrain", "MyVault", "Memory" — this is the root folder for all your memory files)
-- **Using Obsidian?** [ ] Yes [ ] No (Obsidian is optional — the vault is just a folder of markdown files. Obsidian provides a nice UI for browsing/editing them, but everything works without it.)
-- **Do you want the index + pages memory layout?** [ ] Yes [ ] No (If yes, MEMORY.md stays a small index that links out to separate pages for people/companies, topics, and decisions instead of growing into one long file. Recommended once you expect to accumulate months of history; a single flat MEMORY.md is simpler to start with and fine for a slower-moving vault.)
+## 2. Where your work lives
 
----
+Tick what applies and add the account label you want the assistant to use.
 
-## 2. Your Platforms
+- [ ] Gmail, accounts: (e.g. `personal`, `work`)
+- [ ] Google Calendar, accounts:
+- [ ] Telegram
+- [ ] Slack, workspace:
+- [ ] Other (name it, and whether it has an API):
 
-Check every platform you actively use and fill in the specific tool:
+Which one of these is the inbox that matters most?
 
-- [ ] Email (e.g., Gmail, Outlook): ___
-- [ ] Calendar (e.g., Google Calendar, Outlook Calendar): ___
-- [ ] Task Management (e.g., Asana, Linear, Todoist, Jira): ___
-- [ ] Chat/Messaging (e.g., Slack, Discord, Teams): ___
-- [ ] Notes/Documents (e.g., Notion, Obsidian, Google Docs): ___
-- [ ] Cloud Storage (e.g., Google Drive, Dropbox, OneDrive): ___
-- [ ] Code Hosting (e.g., GitHub, GitLab): ___
-- [ ] Community (e.g., Circle, Discord server, Mighty Networks): ___
-- [ ] CRM (e.g., HubSpot, Salesforce, Pipedrive): ___
-- [ ] Other: ___
+## 3. What you want it to do for you
 
----
+List up to five jobs, most valuable first. For each: what triggers it, what the
+output looks like, and whether you must approve before anything leaves the machine.
 
-## 3. Top Tasks for AI
+1.
+2.
+3.
+4.
+5.
 
-List 3-5 tasks you'd want your second brain to handle proactively:
+## 4. How proactive
 
-Examples:
-- Draft email replies to important messages
-- Track deadlines and remind me before they're due
-- Summarize what happened in Slack while I was away
-- Monitor community for questions that need my attention
-- Keep my meeting notes organized and searchable
+Pick one and add any limits (hours, days, channels).
 
-**My list:**
+- [ ] Quiet: only answers when asked.
+- [ ] Watchful: checks on a schedule, tells you only when something changed.
+- [ ] Forward: checks on a schedule and drafts replies or next steps for approval.
 
-1. ___
-2. ___
-3. ___
-4. ___
-5. ___
+Active hours (e.g. 6:00 to 22:00):
+Where notifications should arrive (Telegram, Slack, desktop, none):
 
----
+## 5. Lines it must never cross
 
-## 4. Proactivity Level
+Write the rules in your own words. Common ones: never send anything on my behalf,
+never touch money, never delete files without asking, never edit its own
+personality file, never read outside the vault. Add yours.
 
-How bold should your agent be? Pick one:
+-
+-
+-
 
-- [ ] **Observer** - Notify only, never take action
-- [ ] **Advisor** - Draft things for my review, but never send or post
-- [ ] **Assistant** - Act on low-risk items (log notes, organize files), ask for high-risk
-- [ ] **Partner** - Act autonomously on most things, ask only for irreversible actions
+## 6. What it should remember
 
----
+Which kinds of things are worth keeping for months, not days? Examples: people
+and what they care about, project status, decisions and why, lessons, health,
+money rules. Anything it should refuse to remember?
 
-## 5. Security Boundaries
+Keep:
+Never keep:
 
-What should your agent NEVER do without explicit permission?
+## 7. Where it runs
 
-- [ ] Send emails or messages on my behalf
-- [ ] Post to social media
-- [ ] Modify files outside the memory vault
-- [ ] Access financial data or make purchases
-- [ ] Delete anything
-- [ ] Other: ___
+- [ ] This laptop only
+- [ ] This laptop plus an always-on server (name the OS)
+- Is Docker acceptable? (yes / no / prefer not)
+- Is a paid model API acceptable for cheap background calls, or Claude Code only?
 
----
+## 8. Build order
 
-## 6. Memory Categories
+Rank the integrations from section 2 in the order you want them wired. The first
+one is what the very first working version will use; the rest come later.
 
-What types of knowledge matter most to you? Check all that apply and add your own:
-
-- [ ] Meeting notes and decisions
-- [ ] Project status and progress
-- [ ] Client/customer information
-- [ ] Research and learning notes
-- [ ] Personal goals and habits
-- [ ] Content ideas and drafts
-- [ ] Team context (who does what, preferences, timezones)
-- [ ] Other: ___
-
----
-
-## 7. Infrastructure
-
-- **Operating System:** [ ] Windows [ ] macOS [ ] Linux
-- **Deployment:** [ ] Local only [ ] Local + cloud server (VPS)
-- **Existing tools I already have set up:** ___
-
-  (e.g., "I already use Obsidian", "I have a DigitalOcean droplet", "I'm comfortable with the terminal")
-
----
-
-## 8. Integration Priority
-
-Rank your top 3 integrations to build first (from your answers in Section 2):
-
-1. ___
-2. ___
-3. ___
-
----
-
-> After filling this out, run: `/create-second-brain-prd <path to this file>`
+1.
+2.
+3.
