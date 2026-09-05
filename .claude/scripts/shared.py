@@ -23,6 +23,23 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 _TZ_WARNED = False
 
 
+def _timezone_from_settings_file() -> str:
+    """TIMEZONE straight from the settings file, for callers that run before
+    load_env(). Module-level constants (PST below) are evaluated at import,
+    which is before any script has loaded the file into the environment; without
+    this, a configured timezone was silently ignored by every scheduled script.
+    """
+    try:
+        path = Path(__file__).resolve().parent.parent / ".env"
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("TIMEZONE=") and not line.startswith("#"):
+                return line.split("=", 1)[1].strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
+
+
 def owner_timezone() -> ZoneInfo:
     """Return the configured timezone (TIMEZONE setting), defaulting to Pacific.
 
@@ -32,7 +49,7 @@ def owner_timezone() -> ZoneInfo:
     script imports shared at module load time.
     """
     global _TZ_WARNED
-    tz_name = os.environ.get("TIMEZONE", "").strip()
+    tz_name = os.environ.get("TIMEZONE", "").strip() or _timezone_from_settings_file()
     if not tz_name:
         if not _TZ_WARNED:
             print(

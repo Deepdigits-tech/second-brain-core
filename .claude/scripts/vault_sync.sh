@@ -5,7 +5,7 @@ set -uo pipefail
 # Derive repo root from this script's location (.claude/scripts/vault_sync.sh → repo root)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-LOG="/tmp/secondbrain-sync.log"
+LOG="$REPO_DIR/.git/sync.log"  # per checkout, never tracked
 
 # Paths auto-sync will NOT commit. Source code needs an explicit commit with a
 # real message; everything else (vault, .agents, skills, tracked state) syncs

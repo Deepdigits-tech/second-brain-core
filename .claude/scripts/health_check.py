@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / ".claude" / "data"
 STATE_DIR = DATA_DIR / "state"
 HEARTBEAT_STATE = STATE_DIR / "heartbeat-state.json"
-SYNC_LOG = Path("/tmp/secondbrain-sync.log")
+SYNC_LOG = PROJECT_ROOT / ".git" / "sync.log"
 HEALTH_STATE = STATE_DIR / "health-state.json"
 
 import shared
@@ -99,11 +99,11 @@ def check_local_duplicate() -> dict:
         return _warn("could not check local processes")
 
 
-SYNC_LOG = Path("/tmp/secondbrain-sync.log")
+SYNC_LOG = PROJECT_ROOT / ".git" / "sync.log"
 
 
 def _last_consecutive_failure_count() -> int:
-    """Read /tmp/secondbrain-sync.log and return the consecutive-failure count
+    """Read .git/sync.log and return the consecutive-failure count
     from the most recent line. Zero if the log doesn't exist, can't be read,
     or the most recent run succeeded."""
     if not SYNC_LOG.exists():
@@ -134,7 +134,7 @@ def check_sync_drift() -> dict:
     """Health of the auto-sync between Mac and VPS.
 
     Two layers:
-    1. Read /tmp/secondbrain-sync.log for consecutive-failure count. This is
+    1. Read .git/sync.log for consecutive-failure count. This is
        the *cause* — if sync isn't running, drift is just a symptom.
     2. Fall back to git rev-list drift if the log is unavailable.
     """
@@ -229,7 +229,7 @@ def check_sync_log_freshness() -> dict:
     if not IS_MAC:
         return _ok("skipped (not on Mac — VPS uses cron)")
     if not SYNC_LOG.exists():
-        return _warn("sync log missing (/tmp/secondbrain-sync.log)")
+        return _warn("sync log missing (.git/sync.log)")
     try:
         mtime = SYNC_LOG.stat().st_mtime
         age_min = (time.time() - mtime) / 60

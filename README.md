@@ -111,7 +111,7 @@ so onboarding doesn't trigger again.
 Then bring the system up, one step at a time:
 
 ```bash
-# 1. Connect Google accounts (only if you set COMPOSIO_API_KEY)
+# 1. Connect Google accounts. No Composio account yet? Skip this block; everything below works without it.
 .venv/bin/python3 .claude/scripts/composio_setup.py --urls   # prints one OAuth link per account
 .venv/bin/python3 .claude/scripts/composio_setup.py --list   # confirm each shows connected
 
