@@ -75,6 +75,7 @@ then build from your own PRD so the result reflects your own workflow, not this 
 | Feature runner | `.claude/scripts/feature_run.py` | Per-feature toggles, timing log, failure alerting |
 | Launch units | `.claude/launchd/`, `.claude/systemd/` | Scheduling templates for macOS/Linux, rendered by `install_units.py` |
 | PRD skill | `.claude/skills/create-second-brain-prd/` | Generates a personalized build plan from a filled-out requirements template |
+| Build commands | `.claude/commands/build/` | prime / plan / execute / review slash commands for changing the system safely |
 | Vault templates | `templates/vault/`, `templates/memory/` | Starter vault structure and memory files copied on first setup |
 
 ## Quick Start
@@ -225,6 +226,21 @@ For a persistent instance that runs when your machine is off:
   threads stay responsive without a local machine open.
 - Vault sync keeps the two machines' memory consistent over Git; each machine
   builds its own local search index rather than sharing one.
+
+## Building on it: the four-command loop
+
+`.claude/commands/build/` ships a small, opinionated way to change this system
+without losing the thread between sessions. Each is a slash command in Claude Code.
+
+| Command | When | What it does |
+|---|---|---|
+| `/build:prime` | start of every coding session | Reads CLAUDE.md, the core scripts, and runs the tests once so the model knows the baseline before touching anything |
+| `/build:plan <request>` | before any change | Writes `docs/plans/<date>-<name>.md`: one task per test-plus-commit, with the real code in it, for a reader with no memory of the conversation |
+| `/build:execute <plan>` | to build | Works the plan in order on a branch: failing test, smallest fix, full suite, commit. Refuses to improvise past the plan |
+| `/build:review` | before merging | Reads the whole diff as the person who will maintain it, runs the suite, and returns a verdict with file-and-line findings |
+
+The loop is deliberately boring: a fresh session, prime, plan, execute, review,
+merge by hand. Long sessions drift; short ones with a written plan do not.
 
 ## Command reference
 
