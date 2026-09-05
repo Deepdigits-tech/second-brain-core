@@ -97,21 +97,55 @@ claude
 # first session runs the conversational onboarding (BOOTSTRAP.md)
 ```
 
+> **Prerequisites:** Python 3.12+, Git, and the [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
+> logged in (run `claude` once and follow the browser prompt). For Gmail/Calendar you
+> also need a free [Composio](https://composio.dev) account; it holds the Google OAuth
+> grants so no token files land on disk here.
+
 The onboarding file asks the assistant to delete itself when done — that's an
 instruction the model follows, not code that runs automatically. If
 `vault/BOOTSTRAP.md` is still there after your first session, delete it by hand
 so onboarding doesn't trigger again.
 
-Then bring the system up:
+Then bring the system up, one step at a time:
 
 ```bash
-.venv/bin/python3 .claude/scripts/memory_index.py       # build the search index
-.venv/bin/python3 .claude/scripts/heartbeat.py           # first heartbeat run (test it live)
-.venv/bin/python3 .claude/scripts/memory_search.py "test" # confirm search returns something
+# 1. Connect Google accounts (only if you set COMPOSIO_API_KEY)
+.venv/bin/python3 .claude/scripts/composio_setup.py --urls   # prints one OAuth link per account
+.venv/bin/python3 .claude/scripts/composio_setup.py --list   # confirm each shows connected
 
-.venv/bin/python3 .claude/scripts/install_units.py install --platform launchd   # macOS
-.venv/bin/python3 .claude/scripts/install_units.py install --platform systemd --user <service-user>  # Linux
+# 2. Build the search index (first run downloads a ~45 MB local embedding model)
+.venv/bin/python3 .claude/scripts/memory_index.py
+.venv/bin/python3 .claude/scripts/memory_search.py "onboarding"   # should return a hit
+
+# 3. Run one heartbeat by hand and read what it wrote to vault/daily/
+.venv/bin/python3 .claude/scripts/heartbeat.py
+
+# 4. Check everything at once
+.venv/bin/python3 .claude/scripts/query.py --format text status
+.venv/bin/python3 .claude/scripts/health_check.py
+
+# 5. Schedule the background jobs
+.venv/bin/python3 .claude/scripts/install_units.py list                    # what would be installed
+.venv/bin/python3 .claude/scripts/install_units.py install --platform launchd                       # macOS
+.venv/bin/python3 .claude/scripts/install_units.py install --platform systemd --user <service-user> # Linux
+.venv/bin/python3 .claude/scripts/install_units.py diff                    # must print "same" for every unit
 ```
+
+### What runs, and when
+
+| Job | Schedule | What it does |
+|---|---|---|
+| Heartbeat | every 30 min, 6 AM to 10 PM | Pulls email + calendar, diffs against the last run, screens external text, notifies you only when something changed |
+| Indexer | every 15 min | Incrementally updates the search index as the vault changes |
+| Vault sync | every 2 min | Commits and pushes/pulls the vault so a second machine stays in step |
+| Reflection | daily, 8 AM | Reads yesterday's daily log and promotes durable facts into memory pages |
+| Hygiene | Sundays, 8 AM | Checks the memory index size, dead links, stale items, oversized pages |
+| Chat server | always on (server) | Telegram/Slack bot; one persistent conversation per thread |
+
+Each job is wrapped by `feature_run.py`, which writes one line per run to
+`.claude/data/feature-timings.jsonl` (`ok`, `error`, or `disabled`). Toggle any job
+off in `.claude/data/state/feature-toggles.json` without touching its code.
 
 ### Integrations
 
@@ -126,6 +160,28 @@ visible "not configured" state, never a silent gap.
 | Slack | Bot token (Socket Mode) | DM/mention chat interface |
 
 ## Personalizing
+
+### Memory files
+
+Everything the assistant knows about you lives in `vault/`. Onboarding fills in the
+essentials; edit any of them directly at any time.
+
+| File | What goes in it | Loaded when |
+|---|---|---|
+| `vault/SOUL.md` | The assistant's voice, values, and hard rules (advisor mode: it drafts, never sends) | every session |
+| `vault/USER.md` | Who you are, what you work on, how you like to be talked to | every session |
+| `vault/MEMORY.md` | A short **index** of subjects, each pointing at a page below; kept under 5 KB | every session |
+| `vault/core-memories.md` | A handful of things you never want forgotten; only you write here, never automation | every session |
+| `vault/HEARTBEAT.md` | The checklist each heartbeat works through; rendered from config, regenerate rather than edit | heartbeat runs |
+| `vault/entities/`, `vault/topics/`, `vault/decisions/` | Detail pages: current status plus a dated decision log per subject | on demand |
+| `vault/daily/YYYY-MM-DD.md` | Append-only event log; heartbeat, session flushes, and reflection all write here | on demand, via search |
+| `vault/drafts/active`, `sent`, `expired` | Outbound drafts moving through their lifecycle | heartbeat runs |
+
+Session start injects SOUL, USER, MEMORY, core-memories and the last three daily
+logs, capped at 20,000 characters. Pages are never preloaded: the index tells the
+model where to look, and it reads the page when a subject comes up.
+
+### Other knobs
 
 - **Memory files** — `vault/SOUL.md` (personality, values, advisor-mode rules),
   `vault/USER.md` (who you are, what matters), `vault/MEMORY.md` (the long-term
@@ -170,14 +226,105 @@ For a persistent instance that runs when your machine is off:
 - Vault sync keeps the two machines' memory consistent over Git; each machine
   builds its own local search index rather than sharing one.
 
+## Command reference
+
+```bash
+P=.venv/bin/python3
+
+# Search the vault
+$P .claude/scripts/memory_search.py "what did we decide about pricing"
+$P .claude/scripts/memory_search.py -p vault/daily "standup"          # scope to a folder
+$P .claude/scripts/memory_search.py -w type=decision "vendor"           # filter on frontmatter
+$P .claude/scripts/memory_search.py --mode keyword "exact phrase"       # one half of the hybrid, for debugging
+$P .claude/scripts/memory_index.py --incremental                        # refresh the index
+$P .claude/scripts/memory_links.py dead                                 # wiki-links that point nowhere
+
+# Ask the integrations directly (same data the heartbeat sees)
+$P .claude/scripts/query.py --format text status
+$P .claude/scripts/query.py --format text gmail triage --account personal
+$P .claude/scripts/query.py --format text gmail read --id <message_id>
+$P .claude/scripts/query.py --format text gcal today
+$P .claude/scripts/query.py --format text gcal upcoming --days 3
+$P .claude/scripts/query.py telegram send --text "hello from the CLI"
+
+# Background jobs, by hand
+$P .claude/scripts/heartbeat.py
+$P .claude/scripts/memory_reflect.py --test        # print the reflection prompt, change nothing
+$P .claude/scripts/hygiene.py --dry-run
+$P .claude/scripts/health_check.py
+
+# Security probe: feed the guardrail a suspicious text and read its verdict
+$P .claude/scripts/guardrail.py < some-email.txt
+
+# Chat server (foreground; on a server run it as a service instead)
+$P .claude/chat/server.py
+```
+
+## Configuration reference
+
+All of these go in `master.env` before running `setup_workspace.py`, which copies
+them into the credentials file under `.claude/` (gitignored). Blank means "off".
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `OWNER_NAME` | yes | Your name, used in prompts and to tell your own messages from a correspondent's |
+| `TIMEZONE` | yes | IANA name, e.g. `Europe/Berlin`. Drives daily-log dates, brief times, and the heartbeat's active hours |
+| `CLAUDE_CODE_OAUTH_TOKEN` | for scheduled jobs | Long-lived Claude Code token so cron/launchd runs can authenticate without a browser; see `docs/SETUP.md` |
+| `COMPOSIO_API_KEY` | for Gmail/Calendar | Composio holds the Google OAuth grants; no token files land on disk |
+| `CORTEX_GMAIL_ACCOUNTS` | with Composio | `alias=composio_user_id,...`, one entry per inbox, e.g. `personal=me@example.com,work=me@example.org` |
+| `CORTEX_CALENDAR_ACCOUNTS` | no | Aliases to read calendars from; defaults to the Gmail aliases |
+| `CORTEX_OWNER_EMAILS` | with Composio | Your own addresses, so sent mail is not mistaken for a reply |
+| `CORTEX_PRIMARY_ACCOUNT` | no | Default alias when a command names none; defaults to the first alias |
+| `CORTEX_BUSINESS_ACCOUNT` | no | Where bookings and intros arrive, if not the primary |
+| `CORTEX_PROJECTS` | no | `slug=description;...`, the project list prompts render so the model can file things |
+| `CORTEX_COMPOSIO_CONNECTIONS` | no | Per-account connection ids for `composio_setup.py`; without it the script tells you which are missing |
+| `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | no | Cheap model for single-shot calls (guardrail, log flush). Unset = falls back to the Agent SDK |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | for Telegram | Bot token from BotFather; chat id restricts the bot to you |
+| `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_CHANNEL_ID`, `SLACK_OWNER_USER_ID` | for Slack | Socket Mode bot (no public URL); owner id restricts it to you |
+| `CORTEX_VPS_SSH_ALIAS`, `CORTEX_VPS_REPO_ROOT`, `CORTEX_VPS_USER` | for two machines | Lets the health check confirm the other machine is reachable |
+| `CORTEX_DISABLE_MODULES` | no | Comma-separated kill switch for optional lanes, e.g. `drafts,guardrail` |
+
+Everything above is the whole personalization surface. Nothing in the code needs
+editing to make this yours.
+
+## Troubleshooting
+
+**Background jobs went quiet after a clone or a reboot.** Nine times out of ten it
+is credentials or `PATH`, not code. `docs/SETUP.md` walks the four things a clone
+does not give you, in the order they break.
+
+**Search returns nothing.** The index has not been built on this machine, or the
+embedding model is still downloading on first use. Run
+`memory_index.py` in full, then search again. The index is machine-local by design;
+a second machine builds its own.
+
+**`query.py status` says an integration is not configured.** The matching variable
+is blank or the Composio connection has not been made. `composio_setup.py --list`
+shows the real connection state; `--urls` prints the fix.
+
+**Heartbeat runs but never notifies.** That is usually correct: it only speaks when
+something changed since the last run, and only between 6 AM and 10 PM in your
+timezone. Read `vault/daily/<today>.md` to see what it saw.
+
+**Heartbeat wrote a "Guardrail" entry and stopped.** The screener judged some
+external text as an injection attempt and skipped that run on purpose. The daily
+log names the source. Nothing was lost; the next tick re-evaluates.
+
+**Onboarding fires every session.** `vault/BOOTSTRAP.md` still exists. Delete it.
+
+**Chat bot receives but never replies.** On a server this is almost always an
+expired Claude login. Refresh `CLAUDE_CODE_OAUTH_TOKEN` and restart the chat
+service.
+
+**Two machines fight over the vault.** Daily logs merge automatically (append-only
+merge driver in `templates/vault/.gitattributes`). Anything else conflicting is a
+real conflict: resolve it once, and prefer letting reflection, not both machines,
+edit memory pages.
+
 ## Contributing
 
 Not currently accepting external contributions — this is a reference architecture,
 not a maintained package. Fork it and make it yours.
-
-## License
-
-Add your own license here before publishing.
 
 ## License
 
