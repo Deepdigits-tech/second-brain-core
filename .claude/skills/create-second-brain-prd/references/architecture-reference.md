@@ -86,7 +86,7 @@ Scheduled script at `.claude/scripts/memory_reflect.py`:
 - Mirrors human memory: short-term experiences → sleep consolidation → long-term storage
 
 ### Habits Tracking
-File at `Dynamous/Memory/HABITS.md`:
+File at `vault/HABITS.md`:
 - 3-5 customizable "pillars" representing areas of daily improvement (e.g., main project, community, relationships, health, side project)
 - Each pillar has auto-detection rules: objective achievements can be auto-checked by the heartbeat, personal/relational pillars require self-reporting
 - Daily reset: heartbeat archives yesterday's checklist to a History section and creates a fresh checklist each morning
@@ -95,9 +95,9 @@ File at `Dynamous/Memory/HABITS.md`:
 
 ### Draft Management (Email/Message Drafting)
 Lifecycle system for auto-generated reply drafts:
-- **Active** (`Dynamous/Memory/drafts/active/`): Heartbeat scans emails, community posts, and DMs that need a reply, then generates a draft in the user's voice
-- **Sent** (`Dynamous/Memory/drafts/sent/`): When the user replies on the actual platform, the heartbeat captures their real reply text (not the draft) and moves the file here
-- **Expired** (`Dynamous/Memory/drafts/expired/`): Drafts older than 24 hours with no reply get moved here automatically
+- **Active** (`vault/drafts/active/`): Heartbeat scans emails, community posts, and DMs that need a reply, then generates a draft in the user's voice
+- **Sent** (`vault/drafts/sent/`): When the user replies on the actual platform, the heartbeat captures their real reply text (not the draft) and moves the file here
+- **Expired** (`vault/drafts/expired/`): Drafts older than 24 hours with no reply get moved here automatically
 - **Voice-matching via RAG**: When drafting new replies, search `drafts/sent/` with `memory_search.py --path-prefix drafts/sent` to find similar past replies and match the user's tone
 - **File format**: `YYYY-MM-DD_<type>_<slugified-name>.md` with YAML frontmatter (type, source_id, recipient, subject, context, created, status) + Original Message section + Draft Reply section
 - Drafting criteria defined in USER.md (what to draft, what to skip)

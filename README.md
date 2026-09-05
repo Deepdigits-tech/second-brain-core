@@ -179,9 +179,6 @@ not a maintained package. Fork it and make it yours.
 
 Add your own license here before publishing.
 
-## Origins and license
+## License
 
-This started from the Dynamous community workshop
-[claude-code-second-brain](https://github.com/dynamous-community/workshops/tree/bcce0e4c3c3125bfe9bcbf66bae2a0e206fc1cd8/claude-code-second-brain)
-and grew into a hardened, generic core over several months of daily use.
-Released under the MIT License (see `LICENSE`).
+MIT License (see `LICENSE`).
