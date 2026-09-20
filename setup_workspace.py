@@ -198,9 +198,14 @@ def write_credentials_file(env_dict, dry_run=False):
     # Write dotfile
     if not dry_run:
         credentials_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(credentials_path, "w") as f:
+        # 2026-09-20: Create with 0o600 mode to prevent credential leakage via world-readable files.
+        # Use os.open() for new file, then os.chmod() to tighten any existing file's permissions.
+        fd = os.open(str(credentials_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             for key, value in sorted(credentials.items()):
                 f.write(f"{key}={value}\n")
+        # Ensure existing file permissions are tightened (in case file existed with looser mode)
+        os.chmod(str(credentials_path), 0o600)
 
     print(f"  Created: {credentials_path.resolve().relative_to(Path.cwd().resolve())}")
 
