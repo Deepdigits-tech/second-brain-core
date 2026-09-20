@@ -111,7 +111,7 @@ async def handle_message(incoming, adapter, session_store, cortex_tools, platfor
     )
     from chat.adapters.base import IncomingMessage
 
-    logger.info(f"Message from {incoming.user_id} in {incoming.thread_key}: {incoming.text[:80]}")
+    logger.info(f"Message from {incoming.user_id} in {incoming.thread_key} ({len(incoming.text)} chars)")  # 2026-09-20: log only metadata, never message text
 
     # Inbox-approval fast path: a reply matching today's proposal grammar is
     # handled deterministically and never reaches the Agent SDK session.
@@ -336,6 +336,7 @@ def main():
 
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID") or os.environ.get("TELEGRAM_OWNER_USER_ID")
+    telegram_owner_user_id = os.environ.get("TELEGRAM_OWNER_USER_ID")
     # Optional second Telegram listener: a dedicated capture group. Unset means
     # the whole capture path stays dormant.
     telegram_capture_chat_id = os.environ.get("TELEGRAM_CAPTURE_CHAT_ID")
@@ -392,7 +393,7 @@ def main():
         if telegram_capture_chat_id:
             logger.info(f"Telegram capture group configured — chat {telegram_capture_chat_id}")
 
-        adapters_config.append(("telegram", TelegramAdapter, {"bot_token": telegram_bot_token, "allowed_chat_id": telegram_chat_id, "capture_chat_id": telegram_capture_chat_id, "thread_resolver": _resolve_thread, "context_resolver": _resolve_context}, "telegram"))
+        adapters_config.append(("telegram", TelegramAdapter, {"bot_token": telegram_bot_token, "allowed_chat_id": telegram_chat_id, "owner_user_id": telegram_owner_user_id, "capture_chat_id": telegram_capture_chat_id, "thread_resolver": _resolve_thread, "context_resolver": _resolve_context}, "telegram"))
 
     if args.dry_run:
         logger.info(f"Dry run complete — {len(adapters_config)} adapter(s) configured: {', '.join(c[0] for c in adapters_config)}")

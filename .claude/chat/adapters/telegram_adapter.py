@@ -27,8 +27,13 @@ class TelegramAdapter(ChatAdapter):
         capture_chat_id: str | None = None,
     ):
         self.bot_token = bot_token
-        # Support both param names — VPS uses owner_user_id, local uses allowed_chat_id
+        # Support both param names — VPS uses owner_user_id, local uses allowed_chat_id.
+        # In a private DM the chat id IS the user id, so either works as the DM allowlist.
         self.allowed_chat_id = allowed_chat_id or owner_user_id
+        # 2026-09-20: when set, the SENDER must also be the owner — in DMs and in the
+        # capture group, which used to accept anyone who was in the group. Unset means
+        # no sender check, so a deploy without the variable changes nothing.
+        self.owner_user_id = owner_user_id
         # The capture group is served by THIS adapter, not a second one.
         # Telegram allows exactly one getUpdates poller per bot token, so a
         # second TelegramAdapter on the same token makes the two fight and both
@@ -39,6 +44,21 @@ class TelegramAdapter(ChatAdapter):
         self._bot_id: int | None = None
         self._thread_resolver = thread_resolver
         self._context_resolver = context_resolver
+
+    def _gate(self, user_id: str, chat_id: str) -> tuple[bool, bool]:
+        """(accepted, is_capture) for one incoming message.
+
+        A method rather than lines inside the handler so a test can call it: the
+        first version of the sender check rejected everyone when the variable was
+        unset, and tests that only read the source passed (2026-09-20).
+        """
+        is_capture = bool(self.capture_chat_id and chat_id == self.capture_chat_id)
+        # Judged on who sent it to the bot, never on a forwarded message's original author.
+        if self.owner_user_id and not sender_allowed(user_id, self.owner_user_id):
+            return False, is_capture
+        if not is_capture and not sender_allowed(chat_id, self.allowed_chat_id):
+            return False, is_capture
+        return True, is_capture
 
     async def start(self, message_callback: Callable[[IncomingMessage], Coroutine[Any, Any, None]]) -> None:
         """Start long-polling listener."""
@@ -62,10 +82,9 @@ class TelegramAdapter(ChatAdapter):
                 return
 
             incoming_chat_id = str(update.message.chat_id)
-            is_capture = bool(self.capture_chat_id and incoming_chat_id == self.capture_chat_id)
-
-            if not is_capture and not sender_allowed(incoming_chat_id, self.allowed_chat_id):
-                logger.debug(f"Ignoring message from chat {update.message.chat_id}")
+            accepted, is_capture = self._gate(str(user.id), incoming_chat_id)
+            if not accepted:
+                logger.debug(f"Ignoring message from user {user.id} in chat {incoming_chat_id}")
                 return
 
             # Outside the capture group only plain text is actionable; a photo
