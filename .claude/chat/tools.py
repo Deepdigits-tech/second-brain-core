@@ -125,12 +125,18 @@ def create_cortex_tools(project_root: Path) -> McpSdkServerConfig:
     )
     async def vault_read(args: dict) -> dict:
         rel_path = args["path"]
-        # Security: prevent path traversal
+        # Security: prevent absolute paths and path traversal — 2026-09-20 security fix
+        if rel_path.startswith("/"):
+            return {"content": [{"type": "text", "text": "Error: absolute paths not allowed"}]}
         if ".." in rel_path:
             return {"content": [{"type": "text", "text": "Error: path traversal not allowed"}]}
         target = vault_dir / rel_path
         resolved = target.resolve()
-        if not str(resolved).startswith(str(vault_dir.resolve())):
+        # Use is_relative_to() instead of startswith() to prevent sibling directory bypass
+        vault_resolved = vault_dir.resolve()
+        try:
+            resolved.relative_to(vault_resolved)
+        except ValueError:
             return {"content": [{"type": "text", "text": "Error: path outside vault"}]}
         if not target.exists():
             return {"content": [{"type": "text", "text": f"File not found: vault/{rel_path}"}]}
