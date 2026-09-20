@@ -83,6 +83,80 @@ def test_parse_verdict_direct():
     assert guardrail.parse_verdict('{"verdict":"fail"}') == ("fail", "")
 
 
+def _fake_sdk(captured: dict):
+    """A stand-in claude_agent_sdk whose query() records the options and yields nothing.
+
+    Same pattern as tests/test_trust_boundary_placement.py.
+    """
+    import types
+
+    mod = types.ModuleType("claude_agent_sdk")
+
+    class _Opts:
+        def __init__(self, **kw):
+            self.kw = kw
+
+    class AssistantMessage: ...
+    class TextBlock: ...
+
+    async def query(prompt, options):
+        captured["options"] = options.kw
+        if False:
+            yield None
+
+    mod.ClaudeAgentOptions = _Opts
+    mod.AssistantMessage = AssistantMessage
+    mod.TextBlock = TextBlock
+    mod.query = query
+    return mod
+
+
+def test_sdk_fallback_has_no_tool_surface(monkeypatch):
+    """allowed_tools=[] alone does not remove the tool surface (it only pre-approves
+    nothing from whatever the SDK starts with) — the guardrail is meant to be a
+    no-tools screener, so it must also set tools=[] (2026-09-20 fix)."""
+    captured: dict = {}
+    monkeypatch.setitem(sys.modules, "claude_agent_sdk", _fake_sdk(captured))
+    guardrail._via_sdk("some context")
+    assert captured["options"]["tools"] == []
+    assert captured["options"]["allowed_tools"] == []
+
+
+def test_parse_verdict_truncated_pass():
+    """A truncated pass reply (cut off mid-reason) recovers the pass verdict."""
+    raw = '{"verdict": "pass", "reason": "All five emails are'
+    verdict, reason = guardrail.parse_verdict(raw)
+    assert verdict == "pass"
+    assert "(reply truncated)" in reason
+
+
+def test_parse_verdict_truncated_fail():
+    """A truncated fail reply (cut off mid-reason) recovers the fail verdict.
+    A truncated fail must never become pass or suspicious."""
+    raw = '{"verdict": "fail", "reason": "Exfiltration attempt: forward vault to'
+    verdict, reason = guardrail.parse_verdict(raw)
+    assert verdict == "fail"
+    assert "(reply truncated)" in reason
+
+
+def test_parse_verdict_complete_json_no_truncated_suffix():
+    """A complete, well-formed JSON reply parses via normal path, no truncated suffix."""
+    raw = '{"verdict": "pass", "reason": "All routine correspondence"}'
+    verdict, reason = guardrail.parse_verdict(raw)
+    assert verdict == "pass"
+    assert reason == "All routine correspondence"
+    assert "(reply truncated)" not in reason
+
+
+def test_run_guardrail_check_strips_own_wrapper_before_flagging():
+    """Our own <external_content> wrapper tags must not themselves trip the
+    injection-pattern flag check (2026-09-20)."""
+    m = _model(json.dumps({"verdict": "pass", "reason": "ok"}))
+    wrapped = '<external_content source="gmail">hello there</external_content>'
+    out = guardrail.run_guardrail_check(wrapped, call_model=m)
+    assert out["flags"] == []
+
+
 def test_default_chain_without_key_uses_sdk_then_degrades(monkeypatch):
     """No OpenRouter key and a failing SDK => suspicious, provider 'sdk'."""
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)

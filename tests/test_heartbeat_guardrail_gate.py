@@ -41,6 +41,19 @@ def test_external_text_is_capped():
     assert len(heartbeat.external_text_for_guardrail(big)) <= heartbeat.GUARDRAIL_MAX_CHARS + 100
 
 
+def test_gate_pass_becomes_suspicious_when_digest_was_truncated(monkeypatch):
+    """A cap that silently drops the tail of the digest is worse than a wrong
+    verdict on it — the unscreened part must never come back as a bare pass
+    (2026-09-20)."""
+    monkeypatch.setattr(heartbeat, "run_guardrail_check",
+                         lambda ctx: {"verdict": "pass", "reason": "looks routine", "provider": "test", "flags": []})
+    big = _data("x" * 100_000)
+    verdict = heartbeat.run_guardrail_gate(big)
+    assert verdict["verdict"] == "suspicious"
+    assert "never screened" in verdict["reason"]
+    assert verdict["warning"] is not None
+
+
 def test_gate_fail_skips_and_notifies(monkeypatch):
     notified = {}
     logged = {}

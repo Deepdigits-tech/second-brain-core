@@ -152,14 +152,57 @@ it up instead.
 - The embedding model runs entirely locally — no API call, no key, no network
   dependency for search itself.
 
+### Guardrail (`guardrail.py`, `heartbeat.run_guardrail_gate`)
+
+A no-tools, one-turn model call screens external content — Gmail + Calendar
+fields only (`heartbeat.external_text_for_guardrail`) — before the main
+heartbeat agent (which has Write/Edit) runs. Verdicts: `pass` (silent),
+`suspicious` (a warning is prepended to the main agent's context prompt),
+`fail` (the run is skipped, logged to the daily log under `## HH:MM —
+Guardrail`, and Telegram-notified). Anything that is not a clean, parseable
+verdict — an unreadable reply, an exception, an empty reply, an unknown word —
+is `suspicious`: never promoted to `pass` (an outage must not disable the
+defense) and never to `fail` (an outage must not silence the heartbeat). A
+truncated model reply (cut off mid-`reason`) still recovers its verdict rather
+than reading as unparseable.
+
+The digest is capped at `GUARDRAIL_MAX_CHARS` (20,000); if the external content
+for a tick would exceed it, the cut is made visible instead of silent — a
+`pass` verdict on a truncated digest is demoted to `suspicious` with a reason
+naming the truncation, since content past the cap was never actually screened.
+
+Provider chain, same as the memory flush: OpenRouter single-shot when a key is
+set, Agent SDK with no tools (`tools=[]`, not just `allowed_tools=[]` — the
+latter only pre-approves, it does not remove the SDK's built-in tool surface)
+and one turn as the fallback. Gate: `feature_run("guardrail.precheck")`,
+placed after the "nothing changed" early exit so idle ticks cost nothing.
+Manual probe: `.venv/bin/python3 .claude/scripts/guardrail.py < poisoned.txt`.
+
+Not yet ported from the private build this project was extracted from:
+per-item screening (chunking each email/event separately so one poisoned
+message doesn't quarantine a whole batch), named-item quarantine vs.
+whole-chunk defer, and the inbox classifier filtering that goes with it. The
+guardrail here screens the whole external digest as one call.
+
 ## Hook Architecture
 
 - Credential-guard hook: runs on every file-touching tool call, in every context
   (interactive or background). Blocks read/write access to the credentials file
   and other sensitive paths, and blocks a short list of destructive or
   credential-leaking shell command patterns.
-- Identity write-protection hook: runs on Edit/Write only, background agents
-  only (checked via `CLAUDE_INVOKED_BY`).
+- Identity write-protection hook: runs on Edit/Write/MultiEdit/NotebookEdit AND
+  on Bash, background agents only (checked via `CLAUDE_INVOKED_BY`; an
+  interactive session is never blocked). The Bash branch exists because the
+  Edit/Write check alone does not see a shell command that reaches the same
+  guarded files through `cp`, `mv`, `dd`, `tee`, `sed -i`, an inline
+  interpreter one-liner, or plain `>`/`>>` redirection — it blocks on two
+  independent signals: a guarded basename plus a write-capable shell
+  construct, or an inline interpreter (`-c`/`-e`/heredoc) combined with a
+  file-write primitive, which catches an obfuscated target that a name match
+  alone would miss. A harmless redirect to `/dev/null` does not count as a
+  write. This is defense in depth, not a sandbox — a write staged across two
+  separate Bash calls, or through a construct this hook doesn't recognize,
+  isn't caught by it.
 - These two hooks are independent — one does not replace the other.
 - **Hooks must never hard-require a virtualenv.** Invoke every hook through an
   interpreter fallback (project venv Python, else system `python3`) — a
