@@ -322,6 +322,9 @@ async def flush(transcript_path: str, session_id: str):
         options=ClaudeAgentOptions(
             system_prompt=system_prompt(),
             allowed_tools=[],
+            # allowed_tools=[] only pre-approves nothing; tools=[] actually removes
+            # the built-in tool surface for this single-shot fallback call (2026-09-20).
+            tools=[],
             max_turns=1,
             stderr=sdk_stderr_cb,
             **sdk_cli.cli_kwargs(),

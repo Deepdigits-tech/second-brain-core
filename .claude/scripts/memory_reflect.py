@@ -372,6 +372,12 @@ async def reflect(dry_run: bool = False):
         options=ClaudeAgentOptions(
             system_prompt=system_prompt(),
             allowed_tools=["Read", "Edit", "Write", "Grep", "Glob"],
+            # allowed_tools only pre-approves this list — it does not remove any other
+            # tool the SDK starts with. Reflection is unattended and reads raw daily-log
+            # text (which can carry sanitizer-flagged external content), so lock the
+            # whole built-in tool surface to exactly this list too (2026-09-20).
+            tools=["Read", "Edit", "Write", "Grep", "Glob"],
+            disallowed_tools=["Bash", "WebFetch", "WebSearch", "NotebookEdit", "Task", "Agent"],
             # 25 was enough for a flat MEMORY.md (read, prune, promote, append).
             # Routing now touches multiple pages per run — Grep a mention count,
             # Read or create an entity/topic page, Edit its Current Status and

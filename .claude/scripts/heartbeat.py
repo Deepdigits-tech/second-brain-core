@@ -519,6 +519,10 @@ async def _extract_with_llm_async(rule: dict, msg: dict, body: str) -> list[dict
             options=ClaudeAgentOptions(
                 system_prompt=system_prompt,
                 allowed_tools=[],
+                # allowed_tools=[] only pre-approves nothing — it does not remove the
+                # tool surface. This is a no-tools extraction call over raw email text,
+                # so also set tools=[] to actually take every built-in tool away (2026-09-20).
+                tools=[],
                 max_turns=1,
                 stderr=sdk_stderr_cb,
             ),
@@ -1540,6 +1544,14 @@ async def run_heartbeat(
         opts = sdk_cli.apply_cli_path(dict(
             system_prompt=system_prompt,
             allowed_tools=["Write", "Edit", "Read"],
+            # allowed_tools only pre-approves Write/Edit/Read — it does not remove
+            # anything else the SDK starts with. This agent reads raw, unsanitized-at-
+            # this-layer email/calendar text every run, so Bash (and every other tool
+            # the prompt never asks for) must not exist for it to reach, not just be
+            # unapproved. `tools=` sets the whole built-in surface; `disallowed_tools=`
+            # is belt-and-braces on top of that (2026-09-20).
+            tools=["Write", "Edit", "Read"],
+            disallowed_tools=["Bash", "WebFetch", "WebSearch", "NotebookEdit", "Task", "Agent"],
             max_turns=30,
             cwd=str(PROJECT_ROOT),
             stderr=sdk_stderr_cb,
@@ -1619,6 +1631,35 @@ def external_text_for_guardrail(data: dict) -> str:
     return text[:GUARDRAIL_MAX_CHARS]
 
 
+def _guardrail_digest_truncated(data: dict) -> bool:
+    """True when external_text_for_guardrail() would cut content off.
+
+    A silent cut means whatever came after GUARDRAIL_MAX_CHARS is never
+    screened at all — worse than screening it and getting a wrong verdict,
+    because nothing says it happened. Made visible so run_guardrail_gate can
+    say so instead of passing on unscreened content (2026-09-20).
+    """
+    parts: list[str] = []
+    for account, msgs in (data.get("gmail") or {}).items():
+        for m in msgs or []:
+            block = "\n".join(
+                f"{k}: {m.get(k)}" for k in ("from", "subject", "snippet", "body") if m.get(k)
+            )
+            if block:
+                parts.append(f"[email {account}]\n{block}")
+    for ev in data.get("gcal") or []:
+        fields = []
+        for k in ("summary", "description", "location"):
+            if ev.get(k):
+                fields.append(f"{k}: {ev[k]}")
+        org = (ev.get("organizer") or {}).get("displayName") if isinstance(ev.get("organizer"), dict) else None
+        if org:
+            fields.append(f"organizer: {org}")
+        if fields:
+            parts.append("[calendar]\n" + "\n".join(fields))
+    return len("\n\n".join(parts)) > GUARDRAIL_MAX_CHARS
+
+
 def _append_daily_log(title: str, body: str) -> None:
     """Append `## HH:MM — <title>` + body to today's daily log, under a file lock."""
     import fcntl
@@ -1661,10 +1702,18 @@ def run_guardrail_gate(data: dict, brief_pending: bool = False) -> dict:
     context = external_text_for_guardrail(data)
     if not context.strip():
         return {"verdict": "pass", "reason": "no external content", "provider": "none", "flags": [], "warning": None}
+    truncated = _guardrail_digest_truncated(data)
     result = run_guardrail_check(context)
     flags = ", ".join(result.get("flags") or []) or "none"
     result["warning"] = None
     reason = result.get("reason") or ""
+    if truncated and result["verdict"] == "pass":
+        # A cap that silently drops the tail is worse than a wrong verdict on
+        # it — content past GUARDRAIL_MAX_CHARS was never screened. Never
+        # report a bare pass over content we didn't fully look at.
+        result["verdict"] = "suspicious"
+        reason = (reason + " " if reason else "") + "(external content exceeded the guardrail cap — some of it was never screened)"
+        result["reason"] = reason
     if result["verdict"] == "fail":
         msg = f"{reason or 'no reason given'} (flags: {flags}; provider: {result.get('provider')})"
         if brief_pending:
@@ -1853,7 +1902,7 @@ def _build_triage_section(classify_result: dict, auto_counts: dict) -> list[str]
 # backtick) is tolerated; a pipe separator is still required, and the line must
 # still START with the marker so prose mentioning the word is not mistaken for
 # one. See tests/test_notification_parsing.py.
-NOTIFICATION_RE = r"^[\s*_`>#-]*NOTIFICATION:\s*(.+?)\s*\|\s*(.+)"
+NOTIFICATION_RE = r"^[\s*_`#-]*NOTIFICATION:\s*(.+?)\s*\|\s*(.+)"
 
 # Trailing decoration from the same wrapper, stripped after the split so a
 # bolded line does not end the message with stray asterisks.

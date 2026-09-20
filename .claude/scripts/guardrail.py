@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Callable
@@ -36,6 +37,11 @@ if str(SCRIPTS) not in sys.path:
 from sanitize import check_injection_patterns  # noqa: E402
 
 VERDICTS = ("pass", "suspicious", "fail")
+
+# Wrapper tags this system adds around external text (see sanitize.py). Our
+# own wrapper is not sender content; a sender's attempt at forging one arrives
+# HTML-escaped, so stripping ours before the flag check cannot hide a real one.
+_OWN_WRAPPER_RE = re.compile(r"</?\s*external_content(?:\s[^>]*)?>")
 
 OPENROUTER_MODEL = os.environ.get("OPENROUTER_MODEL", "moonshotai/kimi-k3")
 OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
@@ -79,6 +85,17 @@ def parse_verdict(raw: str) -> tuple[str, str]:
             except json.JSONDecodeError:
                 continue
 
+    # A truncated reply (the model was cut off mid-`reason`) still carries the
+    # verdict, which is written first. Recover it rather than discarding a real
+    # judgment: `fail` and `suspicious` must survive truncation exactly as much
+    # as `pass` does.
+    m = re.search(r'"verdict"\s*:\s*"(pass|fail|suspicious)"', raw, re.I)
+    if m:
+        verdict = m.group(1).lower()
+        rm = re.search(r'"reason"\s*:\s*"([^"]*)', raw)
+        reason = (rm.group(1).strip() if rm else "") or "no reason given"
+        return verdict, f"{reason} (reply truncated)"
+
     return "suspicious", f"unparseable: {raw.strip()[:120]!r}"
 
 
@@ -116,6 +133,11 @@ def _via_sdk(context: str) -> str:
         opts = sdk_cli.apply_cli_path(dict(
             system_prompt=GUARDRAIL_SYSTEM,
             allowed_tools=[],
+            # allowed_tools=[] only pre-approves nothing from whatever tool surface
+            # the SDK starts with — it does not remove the surface itself. This is
+            # meant to be a no-tools screener call, so also set `tools=[]`, which
+            # becomes `--tools ""` and actually removes every built-in tool (2026-09-20).
+            tools=[],
             max_turns=1,
         ))
         async for msg in query(prompt=context, options=ClaudeAgentOptions(**opts)):
@@ -130,7 +152,10 @@ def _via_sdk(context: str) -> str:
 
 def run_guardrail_check(context: str, *, call_model: Callable[[str], str] | None = None) -> dict:
     """Screen `context`. Never raises. See module docstring for the verdict rules."""
-    flags = sorted({name for name, _ in check_injection_patterns(context or "")})
+    # Our own wrapper tags are not sender content; a sender's attempt arrives
+    # HTML-escaped, so stripping ours cannot hide a real one.
+    context_for_pattern_check = _OWN_WRAPPER_RE.sub(" ", context or "")
+    flags = sorted({name for name, _ in check_injection_patterns(context_for_pattern_check)})
     if not context or not context.strip():
         return {"verdict": "pass", "reason": "no external content", "provider": "none", "flags": flags}
 
