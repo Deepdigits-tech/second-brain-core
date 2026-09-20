@@ -43,7 +43,7 @@ class SlackAdapter(ChatAdapter):
         """Start Socket Mode listener. Runs blocking in a thread."""
 
         def _handle_event(event: dict, say) -> None:
-            logger.info(f"Event received: user={event.get('user')}, subtype={event.get('subtype')}, bot_id={event.get('bot_id')}, text={event.get('text', '')[:50]}")
+            logger.info(f"Slack event: user={event.get('user')}, subtype={event.get('subtype')}, text_len={len(event.get('text', ''))} chars")  # 2026-09-20: log only metadata, never message text
             # Filter bot messages and edits
             if event.get("subtype") is not None:
                 return
