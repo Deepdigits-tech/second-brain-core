@@ -64,7 +64,7 @@ MEMORY_INDEX_BACKUP_EXEMPT = "vault/decisions/pre-migration-backup.md"
 # existence, not drift. Anything else that holds only a .gitkeep is still a
 # finding, so the headline number means "unexplained empties", not "all empties".
 DELIBERATE_GITKEEP_DIRS = {
-    ".claude/data", ".claude/data/state",
+    ".claude/data", ".claude/data/state", ".claude/data/liveness",
     "vault/daily", "vault/drafts/active", "vault/drafts/expired", "vault/drafts/sent",
     "vault/meetings", "vault/opportunities", "vault/projects", "vault/research",
     "vault/investments", "vault/intros", "vault/insights", "vault/insights/newsletters",

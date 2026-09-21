@@ -2730,6 +2730,41 @@ def main():
         return report
     health_report = feature_run("health_checks", _run_health_checks, log=debug)
 
+    # 0b2. Peer watch — a cross-machine dead-man's switch. Off by default (a
+    # single-machine install has no peer, so this is a no-op — see
+    # peer_watch.peer_configured() / CORTEX_PEER_MACHINE). Every tick, on
+    # BOTH machines when configured, before the nothing-changed early exit
+    # (so it runs on quiet ticks too, same placement as health_checks):
+    # write our own liveness stamp (cheap, mostly a no-op — see
+    # peer_watch.should_write_stamp), then check the OTHER machine's stamp
+    # and alert if it looks stale. No model call.
+    def _peer_watch():
+        if not lane_available("peer_watch"):
+            return {}
+        import peer_watch
+        if not peer_watch.peer_configured():
+            return {}
+        prev_state: dict = {}
+        if STATE_PATH.exists():
+            try:
+                prev_state = json.load(open(STATE_PATH))
+            except (json.JSONDecodeError, OSError):
+                prev_state = {}
+        now_utc = datetime.now(timezone.utc)
+        # Read from LAST tick's saved state, not this tick's curr_snapshot —
+        # this lane runs before gather_data()/the model call even start, and
+        # the stamp's own write cadence (2h) makes that staleness harmless.
+        peer_watch.write_own_stamp(
+            now_utc,
+            last_model_ok_utc=prev_state.get("last_model_ok_utc"),
+            last_brief_date=prev_state.get("last_morning_brief_date"),
+        )
+        return peer_watch.run(
+            now=now_utc,
+            notify_fn=lambda m: _delivered(notify("", m, channels=["telegram"], parse_mode=None)),
+        )
+    feature_run("health.peer_watch", _peer_watch, log=debug, default={})
+
     try:
         # 1. Gather data
         data = gather_data()
@@ -3050,6 +3085,13 @@ def main():
         )
         if "response_texts" in _model_holder:
             response_texts = _model_holder["response_texts"]
+
+        if response_texts:
+            # peer_watch's model_stale check reads this back next tick (via
+            # the state file, not this tick's curr_snapshot) to tell "ticking
+            # but the model keeps failing" (the auth-expired case) apart from
+            # a real outage.
+            curr_snapshot["last_model_ok_utc"] = datetime.now(timezone.utc).isoformat()
 
         # 9b. Parse TASK_PROPOSAL lines from model output
         def _parse_task_proposals():

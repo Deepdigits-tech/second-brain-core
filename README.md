@@ -143,6 +143,7 @@ Then bring the system up, one step at a time:
 | Reflection | daily, 8 AM | Reads yesterday's daily log and promotes durable facts into memory pages |
 | Hygiene | Sundays, 8 AM | Checks the memory index size, dead links, stale items, oversized pages |
 | Chat server | always on (server) | Telegram/Slack bot; one persistent conversation per thread |
+| DB backup | daily, 3:15 AM | Backs up sqlite databases that aren't tracked in git and aren't rebuildable (e.g. chat history) |
 
 Each job is wrapped by `feature_run.py`, which writes one line per run to
 `.claude/data/feature-timings.jsonl` (`ok`, `error`, or `disabled`). Toggle any job
@@ -298,6 +299,9 @@ them into the credentials file under `.claude/` (gitignored). Blank means "off".
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | for Telegram | Bot token from BotFather; chat id restricts the bot to you |
 | `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_CHANNEL_ID`, `SLACK_OWNER_USER_ID` | for Slack | Socket Mode bot (no public URL); owner id restricts it to you |
 | `CORTEX_VPS_SSH_ALIAS`, `CORTEX_VPS_REPO_ROOT`, `CORTEX_VPS_USER` | for two machines | Lets the health check confirm the other machine is reachable |
+| `CORTEX_PEER_MACHINE` | for two machines | Turns on the cross-machine liveness watcher (`peer_watch.py`); unset = fully off, no peer will ever be reported missing |
+| `CORTEX_BRIEF_OWNER` | no | `1`/`0` overrides which machine sends briefs and owns Telegram push lanes; unset keeps the platform default (VPS if one exists, else the local machine) |
+| `CORTEX_BACKUP_DIR` | no | Where `db_backup.py` writes nightly database backups; defaults to `~/.cortex-backups` |
 | `CORTEX_DISABLE_MODULES` | no | Comma-separated kill switch for optional lanes, e.g. `drafts,guardrail` |
 
 Everything above is the whole personalization surface. Nothing in the code needs

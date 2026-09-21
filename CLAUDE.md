@@ -203,6 +203,58 @@ zero guardrail calls.
   in the same directory, fsyncs, then renames — no writer of a git-tracked
   JSON store should ever leave it torn by a crash mid-write.
 
+- **The main model call has an overall timeout** (`HEARTBEAT_MODEL_TIMEOUT_S`,
+  900s — comfortably under the 30-minute tick interval), wrapped in
+  `asyncio.wait_for` and run under its own `feature_run("heartbeat.model_call",
+  ...)` name so a hung call is visible to the same failure-streak watcher as
+  every other lane, instead of blocking the tick (and the next scheduled
+  timer run) forever. A timeout is handled exactly like an empty or failed
+  model reply. `heartbeat.notify_dispatch` wraps the notification-send step
+  the same way. `main()` now returns `True`/`False`/`None` on purpose — a
+  quiet, nothing-to-do tick stays `None` (falsy, but not a failure), and only
+  the outer exception handler returns `False`; `sys.exit(1 if main() is False
+  else 0)` checks that exact value, not truthiness, so systemd/launchd can
+  finally tell a crashed tick apart from an ordinary quiet one. The systemd
+  heartbeat unit carries `TimeoutStartSec=1500`, comfortably above the
+  model's own 900s budget so the unit's timeout is never what cuts a call off.
+- **`CORTEX_BRIEF_OWNER`** overrides the platform rule (`is_brief_owner()`,
+  used everywhere `BRIEF_OWNER_IS_VPS` used to be read directly) that decides
+  which machine sends briefs and owns every Telegram push lane: `1` forces
+  this machine to own them, `0` forces it off, unset keeps the platform
+  default. Lets a backup machine take over when the usual owner's heartbeat
+  is down, with no code edit — set it explicitly on both machines or you get
+  either no briefs or duplicates.
+- **Cross-machine dead-man's switch** (`peer_watch.py`, heartbeat lane
+  `health.peer_watch`): each machine writes a tiny "I am alive" liveness
+  stamp under `.claude/data/liveness/<machine>.json` (git-tracked — the
+  existing 2-minute vault sync carries it to the other machine, no SSH
+  involved) and, on the OTHER machine, checks whether its peer's stamp looks
+  stale, is failing its model calls, or is missing today's brief. Staleness
+  thresholds respect each machine's own active hours (a laptop sleeping
+  overnight, or closed for an ordinary weekend, is not a problem; a
+  should-be-always-on host going quiet during its own waking hours is) and a
+  peer's stamp is treated as untrusted input — a clock more than 10 minutes
+  in the future, or a timezone-less timestamp, is flagged rather than trusted.
+  **Off by default on a single-machine install**: unset `CORTEX_PEER_MACHINE`
+  means this stays a complete no-op — no state file is ever written, so a
+  peer that will never exist can never be reported as overdue. Set
+  `CORTEX_PEER_MACHINE` (to any non-empty value) on every machine once a real
+  second one is in the picture. On first contact between two machines,
+  neither has the other's stamp yet; a missing stamp is quiet until this
+  machine has been watching for at least that peer's own stale threshold, so
+  the very first tick after wiring two machines together does not false-alarm.
+- **Nightly database backup** (`db_backup.py`, scheduled unit
+  `com.secondbrain.db-backup` / `secondbrain-db-backup.service`+`.timer`):
+  backs up sqlite databases under `.claude/data/` that are not tracked in
+  git and not trivially rebuildable — `chat.db` here (`memory.db` is
+  deliberately excluded: it is a derived search index, fully rebuildable
+  from the vault's own markdown). Backups land under `~/.cortex-backups/
+  <hostname>/<date>/`, verified with a sqlite integrity check, pruned past 14
+  days, symlink-safe (never follows a link named like a date into deleting
+  something else), and the run exits non-zero if nothing was actually backed
+  up. Override the backup root with `CORTEX_BACKUP_DIR` (a bare `/` is
+  refused).
+
 ## Memory Search
 
 - Full reindex: `.venv/bin/python3 .claude/scripts/memory_index.py`
@@ -292,10 +344,25 @@ before anything else runs.
   cron/systemd equivalent, rendered and installed by `install_units.py`
 - VPS/server deployment: run the chat server as a persistent service (systemd or
   equivalent) so chat threads stay responsive without a local machine open
-- Vault sync: Git-based sync between machines on a short interval, with a custom
-  merge driver that auto-resolves append-only daily-log conflicts by
-  concatenating both sides rather than failing the merge
+- Vault sync (`vault_sync.sh`): Git-based sync between machines on a short
+  interval. What it auto-commits is an **allowlist** (`vault`, `CLAUDE.md`,
+  `.claude/data`) — everything else (scripts, hooks, chat code, skills, unit
+  templates, docs) is left uncommitted for a human with a real commit
+  message, logged rather than silently swept in. A stash-pop conflict is
+  resolved, never discarded: a path matching `vault/daily/*.md` or
+  `vault/MEMORY.md` (mirroring `vault/.gitattributes`' `merge=union` entries)
+  keeps both sides' lines, everything else keeps the pulled version and saves
+  the local one under `.claude/data/state/sync-conflicts/<ts>/`. A
+  single-run lock (mkdir-based) keeps two ticks from racing each other; a
+  human-owned merge/cherry-pick/revert/rebase is left untouched and reported
+  once, never auto-aborted; a commit on `main` that auto-sync did not make
+  itself holds the push (not the pull) until a person pushes it by hand, so
+  code review isn't quietly bypassed by the sync cron.
 - Each machine builds and holds its own local search index — the index is not
   synced via Git, only the vault markdown is
+- Cross-machine liveness: see `peer_watch.py` under Proactive Systems above —
+  off by default, opt in with `CORTEX_PEER_MACHINE` once a second machine
+  exists
+- Nightly database backup: see `db_backup.py` under Proactive Systems above
 - See `docs/SETUP.md` for what a clone does not give you (CLI auth, scheduling
   environment, integration OAuth) and how to bring a fresh machine up
