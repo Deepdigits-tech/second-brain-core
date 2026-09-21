@@ -57,6 +57,12 @@ Use a virtualenv Python (`.venv/bin/python3`) for everything below — a bare sy
 Python will be missing dependencies this project needs.
 
 - `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`
+- `claude-agent-sdk` is pinned to `0.1.56` in `requirements.txt` on purpose:
+  the SDK bundles its own CLI, and an older bundled CLI has been observed
+  intermittently rejecting requests with a bodyless 400 error before the
+  model even sees them, while a newer CLI on the same machine did not fail.
+  Upgrading past `0.2.x` would likely remove the underlying cause but changes
+  the options API — the pin is the low-risk fix and stays correct either way.
 
 ### Integrations
 
