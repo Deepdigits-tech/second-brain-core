@@ -1,0 +1,14 @@
+[Unit]
+Description=Second Brain Database Backup (one-shot)
+
+[Service]
+Type=oneshot
+User={{USER}}
+WorkingDirectory={{REPO_ROOT}}
+ExecStart={{PYTHON}} {{REPO_ROOT}}/.claude/scripts/db_backup.py
+Environment=HOME={{HOME}}
+Environment=PATH={{PATH}}
+# No EnvironmentFile: backup runs entirely on-box (no API calls)
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

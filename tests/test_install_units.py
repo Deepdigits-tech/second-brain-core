@@ -20,15 +20,16 @@ REPUTATION_AUDIT_PRESENT = "com.secondbrain.reputation-audit" in _LAUNCHD_LABELS
 
 def test_all_seven_launchd_templates_exist():
     base = {"com.secondbrain.heartbeat", "com.secondbrain.sync", "com.secondbrain.indexer",
-            "com.secondbrain.reflection", "com.secondbrain.hygiene"}
-    # The base five ship everywhere; hd-weather/reputation-audit only on the
+            "com.secondbrain.reflection", "com.secondbrain.hygiene", "com.secondbrain.db-backup"}
+    # The base ships everywhere; hd-weather/reputation-audit only on the
     # Cortex side. Nothing outside base+known-Cortex-only should ever appear.
     assert base <= _LAUNCHD_LABELS_PRESENT
     assert _LAUNCHD_LABELS_PRESENT <= (base | _CORTEX_ONLY_LAUNCHD_LABELS)
 
 def test_all_seven_systemd_templates_exist():
     assert {p.name for p in SYSTEMD} == {"secondbrain-chat.service", "secondbrain-heartbeat.service", "secondbrain-heartbeat.timer",
-        "secondbrain-reflection.service", "secondbrain-reflection.timer", "secondbrain-indexer.service", "secondbrain-indexer.timer"}
+        "secondbrain-reflection.service", "secondbrain-reflection.timer", "secondbrain-indexer.service", "secondbrain-indexer.timer",
+        "secondbrain-db-backup.service", "secondbrain-db-backup.timer"}
 
 @pytest.mark.parametrize("tmpl", LAUNCHD + SYSTEMD, ids=lambda p: p.name)
 def test_templates_carry_no_personal_constants(tmpl):
