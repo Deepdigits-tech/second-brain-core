@@ -163,20 +163,18 @@ def create_cortex_tools(project_root: Path) -> McpSdkServerConfig:
     )
     async def capture_insight(args: dict) -> dict:
         sys.path.insert(0, str(scripts_dir))
-        from shared import file_lock
+        from shared import append_daily_log, owner_timezone
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        pst = owner_timezone()
+        today = datetime.now(pst).strftime("%Y-%m-%d")
         daily_path = vault_dir / "daily" / f"{today}.md"
-        daily_path.parent.mkdir(parents=True, exist_ok=True)
 
-        now = datetime.now(timezone.utc).strftime("%H:%M")
+        now = datetime.now(pst).strftime("%H:%M")
         from sanitize import strip_injection_patterns
         clean_text = strip_injection_patterns(args['text'])
         entry = f"\n## {now} — Insight (via Chat)\n\n{clean_text}\n"
 
-        with file_lock(str(daily_path)):
-            with open(daily_path, "a") as f:
-                f.write(entry)
+        append_daily_log(str(daily_path), entry)
 
         return {"content": [{"type": "text", "text": f"Captured to {daily_path}"}]}
 

@@ -119,6 +119,25 @@ def was_brief_claimed(kind: str) -> bool:
     return _load().get(f"{kind}_brief_date") == _today_pst()
 
 
+def was_notification_claimed(dedup_key: str, *, ttl_minutes: int = 50) -> bool:
+    """Non-claiming read: has `dedup_key` already been sent within the TTL?
+
+    Used to skip a re-send BEFORE calling notify() (2026-09-20) — the actual
+    claim only happens after a successful send, via `claim_notification()`,
+    so a failed send is retried next tick instead of being marked sent.
+    """
+    now = datetime.now(timezone.utc)
+    ttl = timedelta(minutes=ttl_minutes)
+    sent = _load().get("sent_notifications", {})
+    ts = sent.get(dedup_key)
+    if not ts:
+        return False
+    try:
+        return (now - datetime.fromisoformat(ts)) < ttl
+    except ValueError:
+        return False
+
+
 def claim_notification(dedup_key: str, *, ttl_minutes: int = 50) -> bool:
     """Atomically claim a notification send slot keyed by `dedup_key`.
 

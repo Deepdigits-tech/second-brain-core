@@ -134,6 +134,75 @@ it up instead.
   (heartbeat, reflection) from editing the identity files (`SOUL.md`, `USER.md`,
   `MEMORY.md`, `core-memories.md`) — only reflection may write `MEMORY.md`
 
+### Heartbeat tick order and reliability
+
+A tick gathers data, builds and diffs a snapshot against the last saved one,
+and — only if something actually changed or a scheduled brief is due — runs
+the guardrail gate and then the main agent. An idle tick costs zero model and
+zero guardrail calls.
+
+- **Fetch failures are distinguishable from an empty result.** Gmail/Calendar
+  reads report `{account: "ok"|"failed"}` back to the caller
+  (`gather_data()`'s `data["fetch_status"]`). A failed account's ids and
+  calendar fingerprints from the previous snapshot are carried forward
+  unchanged rather than diffed as "everything vanished" — a Composio outage on
+  one account must never read as a wave of cancellations or a wiped inbox on
+  that account. A consecutive-failure streak per source/account is tracked in
+  sticky state for future alerting. The main agent's prompt gets a "Data gaps
+  this run" section naming any account that failed to fetch, so it never
+  claims an inbox or a calendar is empty when the truth is "didn't get an
+  answer".
+- **A moved or cancelled meeting is a real change, not silence.** The snapshot
+  fingerprints each calendar event's start, end, status, location, and the
+  owner's own RSVP; the diff between ticks reports `changed_events` (start
+  moved, or another fingerprinted field changed) and `removed_events`
+  (cancelled, or disappeared from the fetch window while still in the future —
+  an event dropping off after it has already happened is normal, not a
+  cancellation) separately from "new". The prompt renders both under their own
+  headings.
+- **The "N new since last check" count in the prompt matches what's actually
+  listed.** The raw diff count is computed before the guardrail gate runs;
+  what reaches the main agent is whatever survived the gate. The header is
+  recomputed from the ids actually present in the gate-filtered data, not the
+  pre-gate diff count, so it can never claim more items than are shown.
+- **Send first, stamp only on success.** Every "did this actually reach the
+  owner" check (a health-alert cooldown, a scheduled brief's once-a-day claim,
+  a parsed `NOTIFICATION:` line's dedup) calls `notify()`, checks
+  `notify.delivered()` on the result, and only then records the send. A local
+  macOS notification succeeding is not enough on its own to count as
+  delivered when Telegram was one of the attempted channels — Telegram is the
+  channel every stamp actually promises, so its own result is authoritative
+  whenever it was attempted; a channel-less or empty result is never
+  delivered. A failed send leaves the dedup/cooldown/claim untouched so the
+  next tick retries instead of silently losing the message for the rest of
+  its cooldown window. A scheduled brief's claim is taken before the model
+  runs (the prompt has to know whether to ask for one); if the model succeeds
+  but the actual send then fails, the claim is released and the day's
+  brief-sent stamp rolled back so the next tick reclaims and retries.
+- **Per-thread ordering in the chat server.** `handle_message()` acquires an
+  `asyncio.Lock` keyed by thread (refcounted so the lock dict doesn't grow
+  without bound) before doing any work, so two messages arriving for the same
+  conversation are processed one at a time — resuming the same Agent SDK
+  session from two concurrent turns would let the later save clobber the
+  earlier one. Different threads still run concurrently. An SDK error or a
+  timeout deletes the session outright (a poisoned or partially-run session
+  must not be resumed) and is never re-saved or refreshed afterward; a timeout
+  reply says explicitly that some actions may already have run, since the
+  turn could have executed tool calls before the cutoff.
+- **Locking and writes.** `shared.file_lock()` is reentrant per thread (keyed
+  by lock path) — a second acquire of the same path from the same thread
+  inside the first is a no-op, not a second `flock()` call, which would
+  otherwise deadlock the instant anything nests. Never `await` inside it: the
+  reentrancy counter is per OS thread, and every coroutine on an event loop
+  shares one thread. `shared.append_daily_log()` is the one path every daily-
+  log writer (heartbeat, memory flush, chat capture) uses, so two different
+  locking schemes can't fail to keep each other out; daily-log timestamps and
+  filenames are always built from the owner's configured timezone, never a
+  naive/UTC clock, so a server running in UTC doesn't write to the wrong day
+  or stamp the wrong hour. `shared.atomic_write_text()` writes to a temp file
+  in the same directory, fsyncs, then renames — no writer of a git-tracked
+  JSON store should ever leave it torn by a crash mid-write.
+
 ## Memory Search
 
 - Full reindex: `.venv/bin/python3 .claude/scripts/memory_index.py`

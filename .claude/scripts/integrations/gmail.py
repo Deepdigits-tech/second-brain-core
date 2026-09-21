@@ -171,10 +171,20 @@ def _normalize_message(msg: dict) -> dict:
     return normalized
 
 
-def triage(account: str = DEFAULT_ACCOUNT, max_results: int = 20, query: str | None = None) -> list[dict]:
+def triage(
+    account: str = DEFAULT_ACCOUNT,
+    max_results: int = 20,
+    query: str | None = None,
+    status_out: dict | None = None,
+) -> list[dict]:
     """List recent emails with metadata (subject, from, date, snippet).
 
     Returns list of message summaries in normalized format.
+
+    `status_out`, when given, is stamped `{"ok": True|False}` so a caller can
+    tell "the fetch failed" apart from "the fetch succeeded and found nothing"
+    (2026-09-20) — `_execute` returning None already carries that distinction,
+    this just surfaces it instead of collapsing both cases to [].
     """
     args: dict = {"user_id": "me", "maxResults": max_results}
     if query:
@@ -186,7 +196,11 @@ def triage(account: str = DEFAULT_ACCOUNT, max_results: int = 20, query: str | N
 
     data = _execute("GMAIL_FETCH_EMAILS", args, account=account)
     if data is None:
+        if status_out is not None:
+            status_out["ok"] = False
         return []
+    if status_out is not None:
+        status_out["ok"] = True
 
     messages = data.get("messages", [])
     return [_sanitize_email(_normalize_message(m)) for m in messages[:max_results]]
@@ -196,15 +210,23 @@ def query_messages(
     query: str,
     account: str = DEFAULT_ACCOUNT,
     max_results: int = 20,
+    status_out: dict | None = None,
 ) -> list[dict]:
-    """Run a raw Gmail search (Gmail search syntax). Returns normalized messages."""
+    """Run a raw Gmail search (Gmail search syntax). Returns normalized messages.
+
+    See `triage()` for what `status_out` records and why (2026-09-20).
+    """
     data = _execute("GMAIL_FETCH_EMAILS", {
         "user_id": "me",
         "maxResults": max_results,
         "query": query,
     }, account=account)
     if data is None:
+        if status_out is not None:
+            status_out["ok"] = False
         return []
+    if status_out is not None:
+        status_out["ok"] = True
     return [_sanitize_email(_normalize_message(m)) for m in data.get("messages", [])[:max_results]]
 
 
@@ -213,6 +235,7 @@ def find_stale_unread(
     hours: int = 4,
     exclude_ids: set[str] | None = None,
     max_results: int = 5,
+    status_out: dict | None = None,
 ) -> list[dict]:
     """Find UNREAD emails in INBOX older than `hours`, excluding already-notified IDs.
 
@@ -225,6 +248,7 @@ def find_stale_unread(
         f"is:unread in:inbox older_than:{hours}h",
         account=account,
         max_results=max_results * 3,  # over-fetch to survive exclusions
+        status_out=status_out,
     )
     return [m for m in msgs if m.get("id") not in exclude_ids][:max_results]
 
@@ -337,9 +361,22 @@ def list_labels(account: str = DEFAULT_ACCOUNT) -> list[dict]:
     return labels if isinstance(labels, list) else []
 
 
-def triage_all_accounts(max_results: int = 20) -> dict[str, list[dict]]:
-    """Triage all configured accounts. Returns {account_alias: [messages]}."""
-    return {account: triage(account=account, max_results=max_results) for account in account_user_ids()}
+def triage_all_accounts(max_results: int = 20, status_out: dict | None = None) -> dict[str, list[dict]]:
+    """Triage all configured accounts. Returns {account_alias: [messages]}.
+
+    `status_out`, when given, is filled in place with `{account: "ok"|"failed"}`
+    so a caller (heartbeat's gather_data) can tell a Composio/Gmail outage on one
+    account apart from that account's inbox genuinely being empty (2026-09-20) —
+    one account's failure must not blank the others or overwrite the last-good
+    snapshot with an empty one.
+    """
+    out: dict[str, list[dict]] = {}
+    for account in account_user_ids():
+        acct_status: dict = {}
+        out[account] = triage(account=account, max_results=max_results, status_out=acct_status)
+        if status_out is not None:
+            status_out[account] = "ok" if acct_status.get("ok", True) else "failed"
+    return out
 
 
 # ── Label Management ──────────────────────────────────────────────────

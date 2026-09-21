@@ -16,7 +16,11 @@ def notify_macos(title: str, message: str) -> bool:
     escaped_title = title.replace('"', '\\"').replace("'", "'\\''")
     script = f'display notification "{escaped_msg}" with title "{escaped_title}"'
     try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=5)
+        if result.returncode != 0:
+            if sys.stderr:
+                print(f"DEBUG: osascript failed with returncode {result.returncode}", file=sys.stderr)
+            return False
         return True
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
@@ -86,3 +90,26 @@ def notify(
         results["telegram"] = notify_telegram(formatted, parse_mode=parse_mode)
 
     return results
+
+
+def delivered(result: dict | None) -> bool:
+    """Whether a `notify()` result should count as a delivered send.
+
+    On the Mac, `notify()` is called with `channels=["macos", "telegram"]`
+    (its default), so `any(result.values())` is true whenever EITHER channel
+    succeeded — and `notify_macos()` almost always succeeds (osascript works
+    even when the machine has no network), so a dead Telegram bot token still
+    read as "delivered" everywhere a send-then-stamp check used `any()`. Every
+    stamp this codebase makes (a reminder fired, a cooldown started, a brief
+    claimed as sent) is really a promise about reaching the owner on his
+    phone, which is Telegram, not a local screen notification — so when
+    Telegram was one of the attempted channels, only its own result counts.
+    A macos-only call (or any call whose result doesn't mention "telegram" at
+    all) falls back to `any()` — there's nothing more specific to check
+    (2026-09-20).
+    """
+    if not result:
+        return False
+    if "telegram" in result:
+        return bool(result["telegram"])
+    return any(result.values())

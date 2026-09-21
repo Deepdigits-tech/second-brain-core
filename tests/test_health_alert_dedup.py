@@ -32,10 +32,14 @@ def sent(tmp_path, monkeypatch):
     calls = []
     import notify as notify_mod
 
-    monkeypatch.setattr(
-        notify_mod, "notify",
-        lambda title, msg, channels=None, parse_mode="Markdown": calls.append((msg, parse_mode)),
-    )
+    def _fake_notify(title, msg, channels=None, parse_mode="Markdown"):
+        calls.append((msg, parse_mode))
+        # A real notify() always returns {channel: bool} — cooldown is only
+        # stamped on a truthy result (2026-09-20), so the fake must mimic a
+        # successful send or every call here would look like a failed one.
+        return {"telegram": True}
+
+    monkeypatch.setattr(notify_mod, "notify", _fake_notify)
     return calls
 
 

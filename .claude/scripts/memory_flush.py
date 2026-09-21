@@ -26,7 +26,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-from shared import owner_name
+from shared import owner_name, PST
 
 # Resolve project root (this script lives at .claude/scripts/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -266,17 +266,19 @@ async def _write_flush(result: str, session_id: str) -> None:
         return
 
     DAILY_DIR.mkdir(parents=True, exist_ok=True)
-    daily_path = DAILY_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.md"
-    timestamp = datetime.now().strftime("%H:%M")
+    # The VPS runs in UTC — a naive datetime.now() there writes to tomorrow's
+    # (or yesterday's) daily-log file and stamps a UTC clock time. vault/daily/
+    # is the owner's own day, so it's always built from PST, same as
+    # heartbeat.py's own daily-log path construction (2026-09-20).
+    now_pst = datetime.now(PST)
+    daily_path = DAILY_DIR / f"{now_pst.strftime('%Y-%m-%d')}.md"
+    timestamp = now_pst.strftime("%H:%M")
     entry = f"\n## {timestamp} — Memory Flush\n\n{result}\n"
 
     sys.path.insert(0, str(PROJECT_ROOT / ".claude" / "scripts"))
-    from shared import file_lock
+    from shared import append_daily_log
 
-    with file_lock(str(daily_path)):
-        with open(daily_path, "a") as f:
-            f.write(entry)
-
+    append_daily_log(str(daily_path), entry)
     update_dedup(session_id, content_hash)
 
 

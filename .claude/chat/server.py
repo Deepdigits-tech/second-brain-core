@@ -32,6 +32,32 @@ PID_FILE = PROJECT_ROOT / ".claude" / "data" / "chat-server.pid"
 # instead of new chat messages. Must match the set in chat/context.py system prompt.
 ALLOWED_REACTION_EMOJIS = frozenset({"👍", "👌", "🫡", "❤️", "🔥", "🤔", "👀"})
 
+# Per-thread locks for serializing concurrent messages on the same thread (2026-09-20).
+# Two quick messages in one thread are handled as independent asyncio tasks; both would
+# resume the same Agent SDK session and the later save would clobber the earlier one.
+# Holding a lock keyed by thread_key for the whole message body serializes same-thread
+# turns while letting different threads run concurrently.
+_thread_locks: dict[str, asyncio.Lock] = {}
+# Refcount per key so a lock can be dropped once nobody needs it — asyncio.Lock has no
+# public way to ask "is anyone waiting", so a plain counter (incremented on acquire,
+# decremented on release) stands in for that check.
+_thread_lock_refcounts: dict[str, int] = {}
+
+
+def _acquire_thread_lock(thread_key: str) -> asyncio.Lock:
+    _thread_lock_refcounts[thread_key] = _thread_lock_refcounts.get(thread_key, 0) + 1
+    return _thread_locks.setdefault(thread_key, asyncio.Lock())
+
+
+def _release_thread_lock(thread_key: str) -> None:
+    remaining = _thread_lock_refcounts.get(thread_key, 1) - 1
+    if remaining <= 0:
+        _thread_lock_refcounts.pop(thread_key, None)
+        _thread_locks.pop(thread_key, None)
+    else:
+        _thread_lock_refcounts[thread_key] = remaining
+
+
 logging.basicConfig(
     format="[%(asctime)s] %(levelname)s: %(message)s",
     level=logging.INFO,
@@ -101,7 +127,25 @@ DISALLOWED_TOOLS = ("Write", "Edit", "NotebookEdit")
 
 
 async def handle_message(incoming, adapter, session_store, cortex_tools, platform: str):
-    """Process an incoming message through the Agent SDK."""
+    """Process an incoming message through the Agent SDK.
+
+    Acquires the per-thread lock before doing any work (2026-09-20): the deterministic
+    fast-path reply handlers below mutate git-tracked stores just as much as the Agent
+    SDK path does, so they need the same ordering guarantee. The capture-group path
+    never reaches this function at all — it is routed to handle_capture() before
+    handle_message is called — so it needs no lock here.
+    """
+    thread_key = incoming.thread_key
+    _acquire_thread_lock(thread_key)
+    try:
+        async with _thread_locks[thread_key]:
+            await _handle_message_locked(incoming, adapter, session_store, cortex_tools, platform)
+    finally:
+        _release_thread_lock(thread_key)
+
+
+async def _handle_message_locked(incoming, adapter, session_store, cortex_tools, platform: str):
+    """Body of handle_message, run while its thread's lock is held."""
     from claude_agent_sdk import (
         AssistantMessage,
         ClaudeAgentOptions,
@@ -189,6 +233,10 @@ async def handle_message(incoming, adapter, session_store, cortex_tools, platfor
 
         response_parts = []
         result_session_id = None
+        # True once the session row has already been deleted below (error or timeout).
+        # Keeping this explicit means the save/update block never has to trust that an
+        # UPDATE against a row that no longer exists is a harmless no-op (2026-09-20).
+        turn_failed = False
 
         # Build the user prompt: append current time and any notification
         # context the user is replying to.
@@ -206,7 +254,7 @@ async def handle_message(incoming, adapter, session_store, cortex_tools, platfor
         user_prompt = "\n\n".join(prompt_parts)
 
         async def _stream_response():
-            nonlocal result_session_id
+            nonlocal result_session_id, turn_failed
             async for msg in query(prompt=user_prompt, options=options):
                 if isinstance(msg, AssistantMessage):
                     for block in msg.content:
@@ -224,15 +272,33 @@ async def handle_message(incoming, adapter, session_store, cortex_tools, platfor
                         # on every subsequent message until cleared. Lose conversation continuity once,
                         # rather than for every future message in this thread.
                         session_store.delete_session(incoming.thread_key)
+                        # result_session_id is a poisoned/half-run session; drop it so the
+                        # block below neither saves it nor falls through to update_last_active
+                        # on a row that was just deleted (2026-09-20).
+                        result_session_id = None
+                        turn_failed = True
 
         try:
             await asyncio.wait_for(_stream_response(), timeout=AGENT_SDK_TIMEOUT)
         except asyncio.TimeoutError:
             logger.error(f"Agent SDK timed out after {AGENT_SDK_TIMEOUT}s for {incoming.thread_key}")
-            response_parts.append(f"Response timed out after {AGENT_SDK_TIMEOUT}s. Try again.")
+            # Delete the session whose last turn was cut off mid-tool-loop — otherwise
+            # update_last_active below would keep it alive even though it may have partially
+            # executed actions (2026-09-20).
+            session_store.delete_session(incoming.thread_key)
+            result_session_id = None
+            turn_failed = True
+            response_parts.append(
+                f"Response timed out after {AGENT_SDK_TIMEOUT}s. "
+                "Some actions may have already run before the timeout — please check before retrying."
+            )
 
-        # Save/update session
-        if result_session_id:
+        # Save/update session. turn_failed means the row was already deleted above (error
+        # or timeout) — skip straight past both branches rather than relying on
+        # update_last_active being a silent no-op against a row that is gone (2026-09-20).
+        if turn_failed:
+            pass
+        elif result_session_id:
             session_store.save_session(incoming.thread_key, result_session_id, incoming.platform)
         elif existing_session:
             session_store.update_last_active(incoming.thread_key)

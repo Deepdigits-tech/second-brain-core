@@ -19,9 +19,9 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from shared import owner_name, gmail_accounts, business_account, lane_available, projects as _cortex_projects, account_projects as _cortex_account_projects, PST
+from shared import owner_name, gmail_accounts, business_account, lane_available, projects as _cortex_projects, account_projects as _cortex_account_projects, PST, calendar_accounts
 from guardrail import run_guardrail_check
-from notify import notify
+from notify import notify, delivered as _delivered
 
 # ── Constants ──────────────────────────────────────────────────────────
 
@@ -86,7 +86,17 @@ def gather_data() -> dict:
 
     load_env()
     status = check_all()
-    data: dict = {"gmail": {}, "gcal": [], "daily_log": "", "heartbeat_config": "", "config_warnings": []}
+    data: dict = {
+        "gmail": {}, "gcal": [], "daily_log": "", "heartbeat_config": "", "config_warnings": [],
+        # Per-source, per-account fetch outcome (2026-09-20) — "an empty
+        # inbox" and "Gmail didn't answer" used to look identical downstream
+        # (both `[]`), so an outage could overwrite the last-good snapshot
+        # with nothing and the brief would say "nothing needs a reply".
+        # Populated only for accounts actually attempted; a lane that's off
+        # entirely (no config_warnings account) is not a "failure", it's
+        # unconfigured.
+        "fetch_status": {"gmail": {}, "gcal": {}},
+    }
 
     if not gmail_accounts():
         debug("CORTEX_GMAIL_ACCOUNTS not set — Gmail lane disabled")
@@ -94,9 +104,14 @@ def gather_data() -> dict:
 
     if status["gmail"]["available"]:
         try:
-            data["gmail"] = triage_all_accounts(max_results=20)
+            data["gmail"] = triage_all_accounts(max_results=20, status_out=data["fetch_status"]["gmail"])
         except Exception as e:
             debug(f"gmail gather failed: {e}")
+            # Unknown which account(s) got through before the exception — mark
+            # every configured account failed rather than silently leaving
+            # fetch_status empty (which would read as "nothing attempted").
+            for account in gmail_accounts():
+                data["fetch_status"]["gmail"].setdefault(account, "failed")
 
     data["stale_gmail"] = {}
     from integrations.gmail import find_stale_unread, ACCOUNT_USER_IDS
@@ -125,9 +140,11 @@ def gather_data() -> dict:
 
     if status["gcal"]["available"]:
         try:
-            data["gcal"] = agenda_today_all_accounts()
+            data["gcal"] = agenda_today_all_accounts(status_out=data["fetch_status"]["gcal"])
         except Exception as e:
             debug(f"gcal gather failed: {e}")
+            for account in calendar_accounts():
+                data["fetch_status"]["gcal"].setdefault(account, "failed")
 
     daily_path = DAILY_DIR / f"{datetime.now(PST).strftime('%Y-%m-%d')}.md"
     if daily_path.exists():
@@ -172,16 +189,103 @@ def update_notified_ids(state: dict, diff: dict) -> dict:
     return state
 
 
+def _event_start_str(event: dict) -> str:
+    """The event's start as one string, dateTime or all-day date."""
+    start = event.get("start")
+    if isinstance(start, dict):
+        return start.get("dateTime") or start.get("date") or ""
+    return str(start or "")
+
+
+def _event_end_str(event: dict) -> str:
+    end = event.get("end")
+    if isinstance(end, dict):
+        return end.get("dateTime") or end.get("date") or ""
+    return str(end or "")
+
+
+def _event_fingerprint(event: dict) -> str:
+    """Short hash of the fields that mean "this meeting changed" (2026-09-20):
+    start, end, status, location, and the owner's own RSVP. Title is
+    deliberately excluded — a wording edit isn't the kind of change this
+    exists to catch. `location` may already be `<external_content>`-wrapped
+    by gcal._sanitize_event; that is fine to hash as-is since the wrapper is
+    deterministic for the same underlying text.
+    """
+    parts = [
+        _event_start_str(event),
+        _event_end_str(event),
+        str(event.get("status") or ""),
+        str(event.get("location") or ""),
+        str(event.get("_owner_response_status") or ""),
+    ]
+    return hashlib.md5("\x1f".join(parts).encode()).hexdigest()[:12]
+
+
+def _event_start_is_future(start_str: str, now: datetime) -> bool:
+    """True if `start_str` (an event's stored start) is still ahead of `now`.
+
+    Used to decide whether an event that vanished from today's fetch window
+    was actually cancelled, or simply already happened and rolled out of the
+    window the way any past event does (2026-09-20) — the fetch is always
+    "today", so an event dropping off after it ends is normal, not a
+    cancellation.
+    """
+    if not start_str:
+        return False
+    try:
+        if len(start_str) == 10 and start_str.count("-") == 2:
+            # All-day event: "YYYY-MM-DD" — a bare date names the owner's own
+            # day, not a UTC one.
+            dt = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=PST)
+            return dt.date() >= now.astimezone(PST).date()
+        dt = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            # A tz-naive `dateTime` came from something that dropped the
+            # offset — GCal events always carry one, so this is a degraded
+            # value, not a UTC one. Treating it as UTC silently shifts it by
+            # up to 8 hours (PST/PDT), which can flip "still upcoming" to
+            # "already past" right around the boundary. The owner's own
+            # timezone is the least-wrong assumption for HIS calendar data
+            # (2026-09-20).
+            dt = dt.replace(tzinfo=PST)
+        return dt.astimezone(timezone.utc) >= now
+    except ValueError:
+        return False
+
+
 def build_snapshot(data: dict) -> dict:
-    """Build a hashable snapshot of current state for diffing."""
-    gmail_ids = set()
+    """Build a hashable snapshot of current state for diffing.
+
+    Ids are stored two ways (2026-09-20):
+      - `gmail_ids` / `gcal_ids`: bare-id lists, unchanged from before this
+        fix — every existing reader keeps working.
+      - `gmail_keys` / `gcal_events`: "<account>:<id>" keyed, so the same id
+        on two accounts is never collapsed into one entry. `gcal_events`
+        additionally carries a fingerprint (start/end/status/location/RSVP)
+        and the raw start/summary, so a meeting that moved or was cancelled
+        is visible to diff_snapshots() instead of reading as unchanged.
+    """
+    gmail_ids: set[str] = set()
+    gmail_keys: set[str] = set()
     for account, messages in data["gmail"].items():
         for msg in messages:
-            gmail_ids.add(msg.get("id", ""))
+            mid = msg.get("id", "")
+            gmail_ids.add(mid)
+            gmail_keys.add(f"{account}:{mid}")
 
-    gcal_ids = set()
+    gcal_ids: set[str] = set()
+    gcal_events: dict[str, dict] = {}
     for event in data["gcal"]:
-        gcal_ids.add(event.get("id", ""))
+        eid = event.get("id", "")
+        account = event.get("_account", "")
+        gcal_ids.add(eid)
+        gcal_events[f"{account}:{eid}"] = {
+            "fp": _event_fingerprint(event),
+            "start": _event_start_str(event),
+            "status": str(event.get("status") or ""),
+            "summary": event.get("summary", "(no title)"),
+        }
 
     stale_gmail_ids = set()
     for account, messages in (data.get("stale_gmail") or {}).items():
@@ -193,35 +297,252 @@ def build_snapshot(data: dict) -> dict:
 
     return {
         "gmail_ids": sorted_gmail,
+        "gmail_keys": sorted(gmail_keys),
         "stale_gmail_ids": sorted(stale_gmail_ids),
         "gcal_ids": sorted_gcal,
+        "gcal_events": gcal_events,
         "gmail_hash": hashlib.md5(json.dumps(sorted_gmail).encode()).hexdigest(),
         "gcal_hash": hashlib.md5(json.dumps(sorted_gcal).encode()).hexdigest(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
-def diff_snapshots(prev: dict, curr: dict) -> dict:
-    """Compare two snapshots. Returns diff with has_changes flag."""
-    prev_gmail = set(prev.get("gmail_ids", []))
-    curr_gmail = set(curr.get("gmail_ids", []))
-    prev_gcal = set(prev.get("gcal_ids", []))
-    curr_gcal = set(curr.get("gcal_ids", []))
+def _split_key(key: str) -> tuple[str, str]:
+    account, _, eid = key.partition(":")
+    return account, eid
 
-    new_emails = curr_gmail - prev_gmail
-    new_events = curr_gcal - prev_gcal
+
+def diff_snapshots(prev: dict, curr: dict) -> dict:
+    """Compare two snapshots. Returns diff with has_changes flag.
+
+    `new_email_ids` / `new_event_ids` stay bare-id lists — every existing
+    reader expects that shape. `changed_event_ids` / `removed_event_ids` and
+    the richer `changed_events` / `removed_events` (with old/new start and
+    summary, for the prompt) are new (2026-09-20).
+
+    Migration: `prev` may be the OLD state-file shape (no `gmail_keys` /
+    `gcal_events` — written before this fix shipped). Falls back to a bare-id,
+    account-agnostic comparison in that case, and treats a missing fingerprint
+    as "unchanged", so the first tick after deploy does not read the whole
+    calendar/inbox as new or changed.
+    """
+    curr_gmail_ids = set(curr.get("gmail_ids", []))
+
+    if "gmail_keys" in prev:
+        prev_gmail_keys = set(prev.get("gmail_keys", []))
+        curr_gmail_keys = set(curr.get("gmail_keys", []))
+        new_emails = {_split_key(k)[1] for k in (curr_gmail_keys - prev_gmail_keys)}
+    else:
+        prev_gmail_ids = set(prev.get("gmail_ids", []))
+        new_emails = curr_gmail_ids - prev_gmail_ids
 
     # Stale = aged UNREAD IDs surfaced this run but not newly arrived this run
     stale_emails = set(curr.get("stale_gmail_ids", [])) - new_emails
 
+    # ── Calendar events ──────────────────────────────────────────────
+    curr_events: dict[str, dict] = curr.get("gcal_events") or {}
+    prev_events = prev.get("gcal_events")  # None => old-shape prev
+    now = datetime.now(timezone.utc)
+
+    new_event_ids: set[str] = set()
+    changed_event_ids: set[str] = set()
+    removed_event_ids: set[str] = set()
+    changed_events: list[dict] = []
+    removed_events: list[dict] = []
+
+    if prev_events is not None:
+        for key, info in curr_events.items():
+            account, eid = _split_key(key)
+            prev_info = prev_events.get(key)
+            if prev_info is None:
+                new_event_ids.add(eid)
+                continue
+            if info.get("status") == "cancelled" and prev_info.get("status") != "cancelled":
+                removed_event_ids.add(eid)
+                removed_events.append({
+                    "id": eid, "account": account, "start": prev_info.get("start", ""),
+                    "summary": prev_info.get("summary", "(no title)"), "reason": "cancelled",
+                })
+            elif info.get("fp") != prev_info.get("fp"):
+                changed_event_ids.add(eid)
+                changed_events.append({
+                    "id": eid, "account": account,
+                    "old_start": prev_info.get("start", ""), "new_start": info.get("start", ""),
+                    "summary": info.get("summary", "(no title)"),
+                })
+        for key, prev_info in prev_events.items():
+            if key in curr_events:
+                continue
+            account, eid = _split_key(key)
+            start = prev_info.get("start", "")
+            if _event_start_is_future(start, now):
+                removed_event_ids.add(eid)
+                removed_events.append({
+                    "id": eid, "account": account, "start": start,
+                    "summary": prev_info.get("summary", "(no title)"), "reason": "disappeared",
+                })
+    else:
+        # Old-shape prev: no fingerprints or accounts to compare against — a
+        # bare id matches any account, and a missing fingerprint reads as
+        # "unchanged" (migration, 2026-09-20).
+        prev_gcal_ids = set(prev.get("gcal_ids", []))
+        for key, info in curr_events.items():
+            eid = _split_key(key)[1]
+            if eid not in prev_gcal_ids:
+                new_event_ids.add(eid)
+            elif info.get("status") == "cancelled":
+                # Cancellation is still a fresh fact from this tick's fetch,
+                # detectable even without a prior fingerprint to compare to.
+                removed_event_ids.add(eid)
+
     return {
-        "has_changes": bool(new_emails or new_events or stale_emails),
+        "has_changes": bool(
+            new_emails or new_event_ids or stale_emails or changed_event_ids or removed_event_ids
+        ),
         "new_email_count": len(new_emails),
-        "new_event_count": len(new_events),
+        "new_event_count": len(new_event_ids),
         "new_email_ids": list(new_emails),
-        "new_event_ids": list(new_events),
+        "new_event_ids": list(new_event_ids),
         "stale_email_ids": list(stale_emails),
+        "changed_event_ids": list(changed_event_ids),
+        "removed_event_ids": list(removed_event_ids),
+        "changed_events": changed_events,
+        "removed_events": removed_events,
     }
+
+
+def carry_forward_failed_accounts(prev: dict, curr: dict, fetch_status: dict) -> None:
+    """A source that failed to fetch this tick keeps last tick's ids/fingerprints
+    for that account, unchanged (2026-09-20).
+
+    Without this, a transient Gmail/Calendar outage would fetch nothing for the
+    account, `build_snapshot()` would see no messages/events for it, and
+    `diff_snapshots()` would read every id that account had last tick as
+    "removed" (gone from `curr`) — a meeting cancellation storm or a wiped
+    inbox that never actually happened. Carrying the old entries forward makes
+    a failed account diff as exactly unchanged; `has_changes` from that account
+    alone stays False, and a recovery tick (fetch succeeds, nothing actually
+    changed) diffs the same way. Mutates `curr` in place.
+    """
+    gmail_failed = {a for a, s in (fetch_status.get("gmail") or {}).items() if s == "failed"}
+    if gmail_failed:
+        prev_keys = prev.get("gmail_keys") or []
+        carried_keys = {k for k in prev_keys if _split_key(k)[0] in gmail_failed}
+        if carried_keys:
+            curr_keys = set(curr.get("gmail_keys") or []) | carried_keys
+            curr["gmail_keys"] = sorted(curr_keys)
+            carried_bare = {_split_key(k)[1] for k in carried_keys}
+            gmail_ids = sorted(set(curr.get("gmail_ids") or []) | carried_bare)
+            curr["gmail_ids"] = gmail_ids
+            curr["gmail_hash"] = hashlib.md5(json.dumps(gmail_ids).encode()).hexdigest()
+
+    gcal_failed = {a for a, s in (fetch_status.get("gcal") or {}).items() if s == "failed"}
+    if gcal_failed:
+        prev_events = prev.get("gcal_events") or {}
+        carried = {k: v for k, v in prev_events.items() if _split_key(k)[0] in gcal_failed}
+        if carried:
+            curr_events = dict(curr.get("gcal_events") or {})
+            curr_events.update(carried)
+            curr["gcal_events"] = curr_events
+            gcal_ids = sorted(set(curr.get("gcal_ids") or []) | {_split_key(k)[1] for k in carried})
+            curr["gcal_ids"] = gcal_ids
+            curr["gcal_hash"] = hashlib.md5(json.dumps(gcal_ids).encode()).hexdigest()
+
+
+def update_fetch_failure_streak(prev_snapshot: dict, curr_snapshot: dict, fetch_status: dict) -> dict:
+    """Consecutive-failure count per source/account (2026-09-20).
+
+    Recorded so a later lane can alert on a Gmail/Calendar account that's been
+    down for days. An account with no entry in `fetch_status` this tick (lane
+    off, or never attempted) is left exactly as it was, neither incremented
+    nor reset — silence here is not evidence either way. Reads the base count
+    from `prev_snapshot` directly (not `curr_snapshot`) so this can run before
+    or after the rest of the carry-forward block without caring which.
+    Mutates `curr_snapshot` in place.
+    """
+    streaks = dict(prev_snapshot.get("fetch_failure_streak") or {})
+    for source in ("gmail", "gcal"):
+        source_streaks = dict(streaks.get(source) or {})
+        for account, status in (fetch_status.get(source) or {}).items():
+            prev_count = source_streaks.get(account, 0)
+            source_streaks[account] = prev_count + 1 if status == "failed" else 0
+        streaks[source] = source_streaks
+    curr_snapshot["fetch_failure_streak"] = streaks
+    return streaks
+
+
+# State that must survive `build_snapshot()` returning a fresh dict every tick.
+# A once-a-day lane reads its marker from prev_snapshot; if the marker is not
+# carried forward, the tick after a send wipes it and the lane fires again.
+STICKY_STATE_KEYS = frozenset({
+    "fetch_failure_streak",      # consecutive Gmail/GCal fetch failures per account (2026-09-20)
+    "model_retry_counts",        # per-id count of failed model attempts, pruned after 14 days (2026-09-20)
+})
+
+
+# 2026-09-20: progress used to be committed to STATE_PATH before the model
+# call ran, so a failed/empty SDK reply still left this tick's new mail and
+# events marked "seen" — they never reached the model and never would again.
+# A permanently-poisoned id could otherwise loop forever, so each failed tick
+# is counted per id and after MODEL_RETRY_LIMIT failures the id is let
+# through as seen anyway, with one daily-log line saying so.
+MODEL_RETRY_LIMIT = 3
+MODEL_RETRY_PRUNE_DAYS = 14
+
+
+def prune_model_retry_counts(counts: dict, *, max_age_days: int = MODEL_RETRY_PRUNE_DAYS) -> dict:
+    """Drop retry entries whose last failure is older than max_age_days.
+
+    An id that stops arriving (e.g. the email was deleted) would otherwise
+    keep its counter forever with nothing to prune it.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    out = {}
+    for key, entry in (counts or {}).items():
+        ts = _parse_iso(entry.get("last")) if isinstance(entry, dict) else None
+        if ts and ts >= cutoff:
+            out[key] = entry
+    return out
+
+
+def record_model_failure_retries(snapshot: dict, ids: set, *, kind: str) -> set:
+    """Bump the failed-attempt counter for each id that didn't reach a usable
+    model reply this tick. `kind` ('email' or 'event') namespaces the key so
+    an email id and an event id can never collide.
+
+    Returns the subset of `ids` that just hit MODEL_RETRY_LIMIT — these are
+    given up on: the caller should let them through as seen this tick despite
+    the failure, rather than retry them forever. Their counters are cleared
+    (a fresh id could legitimately reuse the same string later).
+    """
+    counts = prune_model_retry_counts(dict(snapshot.get("model_retry_counts") or {}))
+    now_iso = datetime.now(timezone.utc).isoformat()
+    forced: set = set()
+    for i in ids:
+        key = f"{kind}:{i}"
+        prior = counts.get(key) or {"count": 0}
+        count = prior.get("count", 0) + 1
+        if count >= MODEL_RETRY_LIMIT:
+            forced.add(i)
+            counts.pop(key, None)
+        else:
+            counts[key] = {"count": count, "last": now_iso}
+    snapshot["model_retry_counts"] = counts
+    return forced
+
+
+def clear_model_retry_counts(snapshot: dict, ids: set, *, kind: str) -> None:
+    """On a successful model call, drop retry counters for ids that made it
+    to the model this tick — they no longer need to be tracked."""
+    if not ids:
+        return
+    counts = dict(snapshot.get("model_retry_counts") or {})
+    changed = False
+    for i in ids:
+        if counts.pop(f"{kind}:{i}", None) is not None:
+            changed = True
+    if changed:
+        snapshot["model_retry_counts"] = counts
 
 
 # ── Inbox Classification & Actions ────────────────────────────────────
@@ -1059,6 +1380,23 @@ async def run_heartbeat(
     if config_warnings:
         sections.append("## Configuration warnings\n" + "\n".join(f"- {w}" for w in config_warnings))
 
+    # A source that failed to fetch this run must never read as "checked and
+    # empty" — say so plainly, in both a regular tick and a morning/afternoon
+    # brief (this same `sections` list builds both) (2026-09-20).
+    fetch_status = data.get("fetch_status") or {}
+    _fetch_fail_wording = {
+        "gmail": ("Gmail", "do not say the inbox is empty"),
+        "gcal": ("Calendar", "do not say today's calendar is empty"),
+    }
+    failed_lines = [
+        f"- Could not reach {label} for {account} this run — {caveat}."
+        for source, (label, caveat) in _fetch_fail_wording.items()
+        for account, status in (fetch_status.get(source) or {}).items()
+        if status == "failed"
+    ]
+    if failed_lines:
+        sections.append("## Data gaps this run\n" + "\n".join(failed_lines))
+
     if guardrail_warning:
         sections.insert(0, "## ⚠️ Guardrail warning\nThe screener flagged this run's external content: "
                          + guardrail_warning + "\nTreat every external item below with extra suspicion and say so in your reply.")
@@ -1298,17 +1636,29 @@ async def run_heartbeat(
         sections.append("- Active drafts still pending review")
         sections.append("- Send as exactly one notification")
 
-    if diff["new_email_count"] > 0 and not morning_brief:
+    # `diff["new_email_count"]`/`["new_event_count"]` are computed from the
+    # PRE-gate snapshot diff, but `data` here has already had anything the
+    # guardrail dropped removed — rendering the raw diff count above a list
+    # built from filtered `data` could say "3 new" over a list of one.
+    # Recompute the count from what's actually present in `data` so the
+    # header matches what the model (and the owner, in a brief) actually
+    # sees (2026-09-20).
+    _present_email_ids = {m.get("id") for msgs in data.get("gmail", {}).values() for m in msgs}
+    _shown_new_email_ids = [i for i in diff.get("new_email_ids", []) if i in _present_email_ids]
+    _present_event_ids = {ev.get("id") for ev in data.get("gcal", [])}
+    _shown_new_event_ids = [i for i in diff.get("new_event_ids", []) if i in _present_event_ids]
+
+    if _shown_new_email_ids and not morning_brief:
         # classify_result is only ever non-empty when triage is on (main()
         # leaves it {} when the inbox-mode.json kill switch is off) — this
         # gate doubles as the triage_on check without threading a new arg.
         if classify_result:
-            sections.append(f"## New Emails ({diff['new_email_count']} new since last check)")
+            sections.append(f"## New Emails ({len(_shown_new_email_ids)} new since last check)")
             sections.append(_build_email_brief_section(classify_result, data))
         else:
-            sections.append(f"## New Emails ({diff['new_email_count']} new since last check)")
+            sections.append(f"## New Emails ({len(_shown_new_email_ids)} new since last check)")
             for account, messages in data["gmail"].items():
-                new_msgs = [m for m in messages if m.get("id") in diff["new_email_ids"]]
+                new_msgs = [m for m in messages if m.get("id") in _shown_new_email_ids]
                 if new_msgs:
                     sections.append(f"\n### {account}")
                     for msg in new_msgs:
@@ -1320,13 +1670,32 @@ async def run_heartbeat(
         if triage_lines:
             sections.extend(triage_lines)
 
-    if diff["new_event_count"] > 0:
-        sections.append(f"\n## New Calendar Events ({diff['new_event_count']} new)")
+    if _shown_new_event_ids:
+        sections.append(f"\n## New Calendar Events ({len(_shown_new_event_ids)} new)")
         for event in data["gcal"]:
-            if event.get("id") in diff["new_event_ids"]:
+            if event.get("id") in _shown_new_event_ids:
                 start = event.get("start", {}).get("dateTime", event.get("start", {}).get("date", ""))
                 summary = event.get('summary', '(no title)')
                 sections.append(f"- **{summary}** at {start}")
+
+    # A meeting that moved or was cancelled is a real change the owner needs
+    # to hear about, not silence — diff_snapshots() tracks these separately
+    # from "new" (2026-09-20).
+    changed_events = diff.get("changed_events") or []
+    if changed_events:
+        sections.append(f"\n## Changed Calendar Events ({len(changed_events)})")
+        for ev in changed_events:
+            old_start, new_start = ev.get("old_start", ""), ev.get("new_start", "")
+            if old_start and new_start and old_start != new_start:
+                sections.append(f"- **{ev.get('summary', '(no title)')}** moved: was {old_start}, now {new_start}")
+            else:
+                sections.append(f"- **{ev.get('summary', '(no title)')}** changed (now at {new_start})")
+
+    removed_events = diff.get("removed_events") or []
+    if removed_events:
+        sections.append(f"\n## Cancelled Calendar Events ({len(removed_events)})")
+        for ev in removed_events:
+            sections.append(f"- **{ev.get('summary', '(no title)')}** was at {ev.get('start', '')} — cancelled")
 
     if data["gcal"]:
         sections.append("\n## Today's Full Calendar")
@@ -1661,20 +2030,17 @@ def _guardrail_digest_truncated(data: dict) -> bool:
 
 
 def _append_daily_log(title: str, body: str) -> None:
-    """Append `## HH:MM — <title>` + body to today's daily log, under a file lock."""
-    import fcntl
+    """Append `## HH:MM — <title>` + body to today's daily log, under the shared lock.
 
-    daily_dir = VAULT_DIR / "daily"
-    daily_dir.mkdir(parents=True, exist_ok=True)
+    Every daily-log writer goes through shared.append_daily_log. This one used
+    to lock the file itself while the flush and the chat bot locked a sidecar,
+    and two different locks do not keep each other out (2026-09-20).
+    """
+    from shared import append_daily_log
+
     now = datetime.now(PST)
-    path = daily_dir / f"{now.strftime('%Y-%m-%d')}.md"
-    entry = f"\n## {now.strftime('%H:%M')} — {title}\n\n{body.rstrip()}\n"
-    with open(path, "a", encoding="utf-8") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            f.write(entry)
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+    path = VAULT_DIR / "daily" / f"{now.strftime('%Y-%m-%d')}.md"
+    append_daily_log(path, f"\n## {now.strftime('%H:%M')} — {title}\n\n{body.rstrip()}\n")
 
 
 def run_guardrail_gate(data: dict, brief_pending: bool = False) -> dict:
@@ -1919,21 +2285,32 @@ def _clean_notification(title: str, message: str) -> tuple[str, str]:
     return title, message
 
 
-def parse_and_send_notifications(response_texts: list[str]):
+def parse_and_send_notifications(response_texts: list[str]) -> dict:
     """Parse NOTIFICATION lines from SDK response and dispatch.
 
     Two-layer dedup in git-tracked brief-coordination.json:
     - Scheduled briefs: keyed 'morning_brief:YYYY-MM-DD' (date, not content) so
       Mac + VPS agree even when brief content differs slightly.
     - Everything else: keyed 'content:<sha256[:16]>' with 50-min TTL.
+
+    Returns `{"brief_send_failed": "morning"|"afternoon"|None}` (2026-09-20):
+    the morning/afternoon brief is delivered as exactly one NOTIFICATION line
+    through this function. `main()` claims the brief slot (`claim_brief()`)
+    and stamps the last-sent date BEFORE the model even runs, since it has to
+    know whether to ask for one — but a model-OK tick whose actual
+    Telegram/macOS send then fails would otherwise leave that claim and stamp
+    in place with nothing ever delivered, losing the brief for the rest of
+    the day. The caller uses this to release the claim and roll the stamp
+    back so the next tick retries.
     """
     import hashlib
     sys.path.insert(0, str(PROJECT_ROOT / ".claude" / "scripts"))
-    from notify import notify
-    from brief_coord import claim_notification
+    from notify import notify, delivered as _delivered
+    from brief_coord import claim_notification, was_notification_claimed
 
     today_str = datetime.now(PST).strftime("%Y-%m-%d")
     _BRIEF_KEYWORDS = ("Morning Brief", "Afternoon Check-in", "Afternoon Check-In")
+    brief_send_failed: str | None = None
 
     for text in response_texts:
         for line in text.split("\n"):
@@ -1942,19 +2319,36 @@ def parse_and_send_notifications(response_texts: list[str]):
                 continue
             title, message = _clean_notification(match.group(1), match.group(2))
 
-            if any(kw in title for kw in _BRIEF_KEYWORDS):
-                kind = "morning_brief" if "Morning" in title else "afternoon_checkin"
+            is_brief = any(kw in title for kw in _BRIEF_KEYWORDS)
+            if is_brief:
+                brief_kind = "morning" if "Morning" in title else "afternoon"
+                kind = "morning_brief" if brief_kind == "morning" else "afternoon_checkin"
                 dedup_key = f"{kind}:{today_str}"
             else:
+                brief_kind = None
                 h = hashlib.sha256(f"{title}|{message}".encode()).hexdigest()[:16]
                 dedup_key = f"content:{h}"
 
-            if not claim_notification(dedup_key, ttl_minutes=50):
+            # Send first, claim only on success (2026-09-20) — claim_notification
+            # used to be written BEFORE notify() ran and its result was never
+            # checked, so a failed send was still logged and remembered as
+            # "sent" and never retried. was_notification_claimed() is a
+            # non-claiming peek that still stops a genuine duplicate (this
+            # text parsed twice, or the other machine having just sent it).
+            if was_notification_claimed(dedup_key, ttl_minutes=50):
                 debug(f"notification deduped: {title}")
                 continue
 
-            notify(title, message)
-            debug(f"sent notification: {title}")
+            result = notify(title, message)
+            if _delivered(result):
+                claim_notification(dedup_key, ttl_minutes=50)
+                debug(f"sent notification: {title}")
+            else:
+                debug(f"notification send failed, not claimed, retried next tick: {title}")
+                if brief_kind:
+                    brief_send_failed = brief_kind
+
+    return {"brief_send_failed": brief_send_failed}
 
 
 def parse_and_apply_classifications(response_texts: list[str], classify_result: dict):
@@ -2156,7 +2550,6 @@ def _notify_new_health_alerts(alerts: list[str]) -> None:
             except ValueError:
                 pass  # unparseable stamp — treat as never sent
         due.append(alert)
-        sent[key] = now.isoformat()
 
     # Drop keys that have cleared, so a problem that returns later alerts again
     # rather than sitting silent under a stale cooldown.
@@ -2166,10 +2559,18 @@ def _notify_new_health_alerts(alerts: list[str]) -> None:
     if not due:
         debug(f"critical health ({len(alerts)} alert(s)) — all within cooldown, suppressing")
     else:
+        # Cooldown is stamped only on a successful send (2026-09-20) — it used
+        # to be stamped up front, so a failed send still silenced the alert
+        # for HEALTH_ALERT_COOLDOWN_HOURS with nobody ever told.
         # parse_mode=None: identifiers like CLAUDE_CODE_OAUTH_TOKEN must stay
         # copy-pasteable, and Markdown renders the underscores as italics.
-        notify("CRITICAL: Cortex Health", "; ".join(due), parse_mode=None)
-        debug(f"sent critical health alert for {len(due)} new/expired alert(s)")
+        result = notify("CRITICAL: Cortex Health", "; ".join(due), parse_mode=None)
+        if _delivered(result):
+            for alert in due:
+                sent[_alert_key(alert)] = now.isoformat()
+            debug(f"sent critical health alert for {len(due)} new/expired alert(s)")
+        else:
+            debug(f"critical health alert send failed for {len(due)} alert(s) — not stamped, retried next tick")
 
     try:
         from shared import save_state
@@ -2350,7 +2751,14 @@ def main():
             except (json.JSONDecodeError, OSError):
                 pass
 
+        # A source that failed to fetch this tick keeps last tick's ids for
+        # that account, so a Gmail/Calendar outage never reads as a wave of
+        # cancellations or a wiped inbox (2026-09-20).
+        carry_forward_failed_accounts(prev_snapshot, curr_snapshot, data.get("fetch_status") or {})
+
         diff = diff_snapshots(prev_snapshot, curr_snapshot)
+
+        update_fetch_failure_streak(prev_snapshot, curr_snapshot, data.get("fetch_status") or {})
 
         sys.path.insert(0, str(PROJECT_ROOT / ".claude" / "scripts"))
         from shared import save_state
@@ -2631,8 +3039,25 @@ def main():
 
         # 10. Parse and send notifications
         if response_texts:
-            parse_and_send_notifications(response_texts)
+            notif_result = parse_and_send_notifications(response_texts)
             parse_and_apply_classifications(response_texts, classify_result)
+
+            # The brief was claimed above (before the model even ran, since it
+            # has to know whether to ask for one), but its actual Telegram/macOS
+            # send just failed — release the claim so the next tick retries
+            # instead of finding today's brief marked done with nothing sent
+            # (2026-09-20).
+            brief_kind_failed = notif_result.get("brief_send_failed")
+            if brief_kind_failed:
+                _rollback_brief_claims(
+                    curr_snapshot, prev_snapshot,
+                    morning=(brief_kind_failed == "morning"),
+                    afternoon=(brief_kind_failed == "afternoon"),
+                )
+                save_state(str(STATE_PATH), curr_snapshot)
+                from brief_coord import release_brief as _release_brief
+                _release_brief(brief_kind_failed)
+                debug(f"{brief_kind_failed} brief send failed — claim released, retried next tick")
 
         # 10b. If LLM emitted a NOTIFICATION: Practice line, stamp the cooldown.
         # Done lazily after dispatch — if the LLM suppressed the nudge, no

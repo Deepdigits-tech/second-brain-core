@@ -8,6 +8,8 @@ import importlib
 import json
 import os
 import sys
+import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -218,19 +220,100 @@ def build_vault_context(vault, max_daily_lines: int = MAX_DAILY_LINES, include_d
     return cut_at_line_boundary(text, hard_limit).rstrip() + marker
 
 
+_FILE_LOCK_LOCAL = threading.local()
+
+
 @contextlib.contextmanager
 def file_lock(path):
     """Exclusive file lock using fcntl.flock (macOS/Linux).
     # Windows would need msvcrt.locking instead.
+
+    Reentrant PER THREAD, keyed by lock path (2026-09-20): `fcntl.flock`
+    locks an open file DESCRIPTION, not a thread or process — a second
+    `open()` + `flock()` on the same path from the same thread is a second,
+    distinct file description asking the OS for the same exclusive lock the
+    first one already holds, and blocks forever. The docstring here used to
+    claim reentrancy while the implementation opened a fresh fd and called
+    flock unconditionally on every entry, which deadlocks the instant
+    anything nests (e.g. a function that takes this lock calling another
+    that takes it again for the same path). A thread-local depth counter per
+    path makes a nested acquire in the same thread a genuine no-op instead;
+    a different thread still blocks on the real flock, exactly as before.
+
+    Never `await` inside this lock. The counter is per THREAD, and every
+    coroutine on the chat server's event loop shares one thread: a second
+    coroutine would see depth > 0 and walk straight in.
     """
+    depths = getattr(_FILE_LOCK_LOCAL, "depths", None)
+    if depths is None:
+        depths = {}
+        _FILE_LOCK_LOCAL.depths = depths
+
     lock_path = f"{path}.lock"
+    depth = depths.get(lock_path, 0)
+    if depth > 0:
+        # Already held by this thread — no new fd, no new flock call.
+        depths[lock_path] = depth + 1
+        try:
+            yield
+        finally:
+            depths[lock_path] = depths[lock_path] - 1
+        return
+
     lock_fd = open(lock_path, "w")
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        yield
+        depths[lock_path] = 1
+        try:
+            yield
+        finally:
+            depths[lock_path] = 0
     finally:
         fcntl.flock(lock_fd, fcntl.LOCK_UN)
         lock_fd.close()
+
+
+def append_daily_log(path: Path | str, text: str) -> None:
+    """Append text to a daily log file atomically via a sidecar lock.
+
+    Ensures thread-safe append-only writes to daily logs without corrupting
+    the file. Multiple writers (heartbeat, memory_flush, chat server) share
+    a sidecar lock file to serialize their writes.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(str(path)):
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(text)
+
+
+def atomic_write_text(path: Path | str, text: str) -> None:
+    """Write text to a file atomically via a temp file and os.replace.
+
+    Prevents torn writes if a crash or sync interrupts mid-write. The write
+    is fully flushed to disk before the atomic rename, so a power loss during
+    the rename leaves either the old file or the new one, never a truncated
+    file in between.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write to a temp file in the same directory so os.replace stays on the
+    # same filesystem (atomic on POSIX).
+    fd, temp_path = tempfile.mkstemp(dir=str(path.parent), text=True)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())  # Force to disk before rename
+        os.replace(temp_path, path)
+    except Exception:
+        # Clean up the temp file if anything went wrong
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
 
 
 def with_retry(max_retries=3, backoff=1.0):

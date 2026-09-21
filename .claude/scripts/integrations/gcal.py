@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from integrations.gmail import _execute, DEFAULT_ACCOUNT
 
-from shared import PST
+from shared import PST, owner_emails
 
 # Aliases that have googlecalendar connected on Composio. Source of truth for
 # anything that needs to fan out across all of the owner's calendars (heartbeat,
@@ -88,8 +88,36 @@ def _week_bounds() -> tuple[str, str]:
     return start.isoformat(), end.isoformat()
 
 
-def _fetch_events(time_min: str, time_max: str, account: str = DEFAULT_ACCOUNT) -> list[dict]:
-    """Fetch calendar events within a time range."""
+def _owner_response_status(event: dict) -> str | None:
+    """The owner's own RSVP for an event, or None if not found/not invited.
+
+    Read from the raw (pre-sanitize) attendee list — `_sanitize_event` wraps
+    attendee `email` in `<external_content>` tags, which would break an exact
+    match against `shared.owner_emails()`. `responseStatus` itself is a
+    Google-controlled enum ("accepted"/"declined"/"tentative"/"needsAction"),
+    not attacker-controlled free text, so it is safe to read and fingerprint
+    unsanitized (used by build_snapshot's event fingerprint, 2026-09-20).
+    """
+    try:
+        owners = {e.lower() for e in owner_emails()}
+    except Exception:
+        return None
+    for a in event.get("attendees") or []:
+        if isinstance(a, dict) and (a.get("email") or "").lower() in owners:
+            return a.get("responseStatus")
+    return None
+
+
+def _fetch_events(
+    time_min: str, time_max: str, account: str = DEFAULT_ACCOUNT, status_out: dict | None = None,
+) -> list[dict]:
+    """Fetch calendar events within a time range.
+
+    `status_out`, when given, is stamped `{"ok": True|False}` so a caller can
+    tell a Composio/Calendar outage apart from a genuinely empty result
+    (2026-09-20) — `_execute` returning None already carries that distinction,
+    this just surfaces it instead of collapsing both cases to [].
+    """
     data = _execute("GOOGLECALENDAR_EVENTS_LIST", {
         "calendarId": "primary",
         "timeMin": time_min,
@@ -100,33 +128,53 @@ def _fetch_events(time_min: str, time_max: str, account: str = DEFAULT_ACCOUNT) 
     }, account=account)
 
     if data is None:
+        if status_out is not None:
+            status_out["ok"] = False
         return []
+    if status_out is not None:
+        status_out["ok"] = True
     if isinstance(data, dict):
         items = data.get("items", [])
-        return [_sanitize_event(ev) if isinstance(ev, dict) else ev for ev in items]
+        out = []
+        for ev in items:
+            if isinstance(ev, dict):
+                # Stamp before sanitizing — see _owner_response_status docstring.
+                ev["_owner_response_status"] = _owner_response_status(ev)
+                ev = _sanitize_event(ev)
+            out.append(ev)
+        return out
     return []
 
 
-def agenda_today(account: str = DEFAULT_ACCOUNT) -> list[dict]:
+def agenda_today(account: str = DEFAULT_ACCOUNT, status_out: dict | None = None) -> list[dict]:
     """Get today's calendar events for one account."""
     time_min, time_max = _today_bounds()
-    return _fetch_events(time_min, time_max, account)
+    return _fetch_events(time_min, time_max, account, status_out=status_out)
 
 
-def agenda_today_all_accounts() -> list[dict]:
+def agenda_today_all_accounts(status_out: dict | None = None) -> list[dict]:
     """Today's events merged across every account in CALENDAR_ACCOUNTS.
 
     Each event is tagged with `_account` so consumers (heartbeat brief,
     body_signal, weekly report) know which calendar surfaced it. Per-account
     failures are isolated — a broken connection on one calendar shouldn't
     blank out the others.
+
+    `status_out`, when given, is filled in place with `{account: "ok"|"failed"}`
+    (2026-09-20), same contract as gmail.triage_all_accounts — an exception
+    here (previously a silent `continue`) now also counts as "failed" rather
+    than reading identically to an empty calendar.
     """
     out: list[dict] = []
     for account in calendar_accounts():
+        acct_status: dict = {}
         try:
-            events = agenda_today(account=account)
+            events = agenda_today(account=account, status_out=acct_status)
         except Exception:
-            continue
+            acct_status["ok"] = False
+            events = []
+        if status_out is not None:
+            status_out[account] = "ok" if acct_status.get("ok", True) else "failed"
         for ev in events:
             ev["_account"] = account
             out.append(ev)
