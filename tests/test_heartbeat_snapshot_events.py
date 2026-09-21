@@ -89,10 +89,10 @@ def test_event_that_already_ended_and_dropped_out_of_window_is_not_removed():
 def test_same_event_id_on_two_accounts_is_two_entries():
     curr = heartbeat.build_snapshot(_data([
         _event("shared1", "personal", "2026-09-21T09:00:00-07:00"),
-        _event("shared1", "deepdigits", "2026-09-21T09:00:00-07:00"),
+        _event("shared1", "work", "2026-09-21T09:00:00-07:00"),
     ]))
     assert "personal:shared1" in curr["gcal_events"]
-    assert "deepdigits:shared1" in curr["gcal_events"]
+    assert "work:shared1" in curr["gcal_events"]
     assert len(curr["gcal_events"]) == 2
     assert curr["gcal_ids"] == ["shared1"]  # legacy bare-id list still collapses, by design
 
@@ -147,8 +147,8 @@ def test_gmail_same_id_on_two_accounts_counts_as_new_on_each():
         return {"gmail": {a: [{"id": "dup1"}] for a in accounts_with_msg}, "gcal": [], "stale_gmail": {}}
 
     prev = heartbeat.build_snapshot(gmail_data(["personal"]))
-    curr = heartbeat.build_snapshot(gmail_data(["personal", "deepdigits"]))
+    curr = heartbeat.build_snapshot(gmail_data(["personal", "work"]))
     diff = heartbeat.diff_snapshots(prev, curr)
     assert "dup1" in diff["new_email_ids"]
     assert "personal:dup1" in curr["gmail_keys"]
-    assert "deepdigits:dup1" in curr["gmail_keys"]
+    assert "work:dup1" in curr["gmail_keys"]

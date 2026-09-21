@@ -52,7 +52,7 @@ def test_gmail_triage_marks_ok_on_a_genuinely_empty_inbox(monkeypatch):
 
 
 def test_triage_all_accounts_isolates_one_failed_account(monkeypatch):
-    monkeypatch.setattr(gmail, "account_user_ids", lambda: {"personal": "p", "deepdigits": "d"})
+    monkeypatch.setattr(gmail, "account_user_ids", lambda: {"personal": "p", "work": "d"})
 
     def fake_execute(tool, args, account="personal"):
         if account == "personal":
@@ -62,9 +62,9 @@ def test_triage_all_accounts_isolates_one_failed_account(monkeypatch):
     monkeypatch.setattr(gmail, "_execute", fake_execute)
     status: dict = {}
     out = gmail.triage_all_accounts(status_out=status)
-    assert status == {"personal": "failed", "deepdigits": "ok"}
+    assert status == {"personal": "failed", "work": "ok"}
     assert out["personal"] == []
-    assert len(out["deepdigits"]) == 1  # the other account's results are untouched
+    assert len(out["work"]) == 1  # the other account's results are untouched
 
 
 def test_gcal_fetch_events_marks_failure_and_ok(monkeypatch):
@@ -80,7 +80,7 @@ def test_gcal_fetch_events_marks_failure_and_ok(monkeypatch):
 
 
 def test_agenda_today_all_accounts_isolates_one_failed_account(monkeypatch):
-    monkeypatch.setenv("CORTEX_CALENDAR_ACCOUNTS", "personal,deepdigits")
+    monkeypatch.setenv("CORTEX_CALENDAR_ACCOUNTS", "personal,work")
     import shared
     shared.calendar_accounts.cache_clear()
 
@@ -97,9 +97,9 @@ def test_agenda_today_all_accounts_isolates_one_failed_account(monkeypatch):
     status: dict = {}
     events = gcal.agenda_today_all_accounts(status_out=status)
     shared.calendar_accounts.cache_clear()
-    assert status == {"personal": "failed", "deepdigits": "ok"}
+    assert status == {"personal": "failed", "work": "ok"}
     assert len(events) == 1
-    assert events[0]["_account"] == "deepdigits"
+    assert events[0]["_account"] == "work"
 
 
 def test_agenda_today_all_accounts_records_failed_on_exception(monkeypatch):
@@ -147,7 +147,7 @@ def test_gather_data_records_failed_gmail_account(monkeypatch, tmp_path):
 
 
 def test_gather_data_exception_marks_every_configured_account_failed(monkeypatch, tmp_path):
-    monkeypatch.setattr(heartbeat, "gmail_accounts", lambda: {"personal": "p", "deepdigits": "d"})
+    monkeypatch.setattr(heartbeat, "gmail_accounts", lambda: {"personal": "p", "work": "d"})
     monkeypatch.setattr(heartbeat, "calendar_accounts", lambda: [])
     monkeypatch.setattr(heartbeat, "STATE_PATH", tmp_path / "heartbeat-state.json")
     monkeypatch.setattr(heartbeat, "DAILY_DIR", tmp_path)
@@ -163,10 +163,10 @@ def test_gather_data_exception_marks_every_configured_account_failed(monkeypatch
         raise RuntimeError("composio down")
     monkeypatch.setattr(gmail, "triage_all_accounts", boom)
     monkeypatch.setattr(gmail, "find_stale_unread", lambda **k: [])
-    monkeypatch.setattr(gmail, "account_user_ids", lambda: {"personal": "p", "deepdigits": "d"})
+    monkeypatch.setattr(gmail, "account_user_ids", lambda: {"personal": "p", "work": "d"})
 
     data = heartbeat.gather_data()
-    assert data["fetch_status"]["gmail"] == {"personal": "failed", "deepdigits": "failed"}
+    assert data["fetch_status"]["gmail"] == {"personal": "failed", "work": "failed"}
 
 
 # ── carry_forward_failed_accounts: failed account keeps its old entries ───
@@ -191,18 +191,18 @@ def test_failed_gmail_account_ids_carried_forward_unchanged():
 
 def test_one_failed_account_does_not_erase_another_accounts_results():
     prev = heartbeat.build_snapshot({
-        "gmail": {"personal": [{"id": "m1"}], "deepdigits": [{"id": "d1"}]}, "gcal": [], "stale_gmail": {},
+        "gmail": {"personal": [{"id": "m1"}], "work": [{"id": "d1"}]}, "gcal": [], "stale_gmail": {},
     })
-    # personal failed (nothing fetched); deepdigits succeeded with a genuinely new message
+    # personal failed (nothing fetched); work succeeded with a genuinely new message
     curr = heartbeat.build_snapshot({
-        "gmail": {"deepdigits": [{"id": "d1"}, {"id": "d2"}]}, "gcal": [], "stale_gmail": {},
+        "gmail": {"work": [{"id": "d1"}, {"id": "d2"}]}, "gcal": [], "stale_gmail": {},
     })
-    fetch_status = {"gmail": {"personal": "failed", "deepdigits": "ok"}, "gcal": {}}
+    fetch_status = {"gmail": {"personal": "failed", "work": "ok"}, "gcal": {}}
     heartbeat.carry_forward_failed_accounts(prev, curr, fetch_status)
     diff = heartbeat.diff_snapshots(prev, curr)
 
     assert "m1" in curr["gmail_ids"]  # personal carried forward
-    assert "d2" in diff["new_email_ids"]  # deepdigits' real new mail still detected
+    assert "d2" in diff["new_email_ids"]  # work' real new mail still detected
     assert diff["has_changes"] is True
 
 
