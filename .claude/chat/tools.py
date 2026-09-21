@@ -69,7 +69,7 @@ def create_cortex_tools(project_root: Path) -> McpSdkServerConfig:
         from integrations.gmail import triage
 
         results = triage(
-            account=args.get("account", "personal"),
+            account=args.get("account", _default_account),
             max_results=args.get("max_results", 10),
             query=args.get("query"),
         )
@@ -86,7 +86,7 @@ def create_cortex_tools(project_root: Path) -> McpSdkServerConfig:
     async def gmail_read(args: dict) -> dict:
         from integrations.gmail import read_message
 
-        result = read_message(args["message_id"], account=args.get("account", "personal"))
+        result = read_message(args["message_id"], account=args.get("account", _default_account))
         return {"content": [{"type": "text", "text": json.dumps(result, indent=2, default=str)}]}
 
     @tool(
@@ -99,7 +99,7 @@ def create_cortex_tools(project_root: Path) -> McpSdkServerConfig:
     async def gcal_today(args: dict) -> dict:
         from integrations.gcal import agenda_today
 
-        results = agenda_today(account=args.get("account", "personal"))
+        results = agenda_today(account=args.get("account", _default_account))
         return {"content": [{"type": "text", "text": json.dumps(results, indent=2, default=str)}]}
 
     @tool(
@@ -113,7 +113,7 @@ def create_cortex_tools(project_root: Path) -> McpSdkServerConfig:
     async def gcal_upcoming(args: dict) -> dict:
         from integrations.gcal import agenda_upcoming
 
-        results = agenda_upcoming(days=args.get("days", 3), account=args.get("account", "personal"))
+        results = agenda_upcoming(days=args.get("days", 3), account=args.get("account", _default_account))
         return {"content": [{"type": "text", "text": json.dumps(results, indent=2, default=str)}]}
 
     @tool(
@@ -207,7 +207,7 @@ def create_cortex_tools(project_root: Path) -> McpSdkServerConfig:
         from integrations.gmail import read_message
         from inbox.classifier import classify_email, _load_rules
 
-        account = args.get("account", "personal")
+        account = args.get("account", _default_account)
         message_id = args["message_id"]
 
         msg = read_message(message_id, account=account, metadata_only=True)
@@ -454,7 +454,7 @@ def create_cortex_tools(project_root: Path) -> McpSdkServerConfig:
         else:
             from integrations.gcal import agenda_today
             try:
-                events = agenda_today(account=args.get("account") or "personal")
+                events = agenda_today(account=args.get("account") or _default_account)
             except Exception as e:
                 return {"content": [{"type": "text", "text": f"Couldn't read the calendar: {e}"}]}
             open_minutes = tq.free_minutes(events, now=datetime.now(tq.PST))
@@ -493,7 +493,7 @@ def create_cortex_tools(project_root: Path) -> McpSdkServerConfig:
         import focus as fc
         from integrations.gcal import agenda_today, create_event
 
-        account = args.get("account") or "personal"
+        account = args.get("account") or _default_account
         try:
             events = agenda_today(account=account)
         except Exception as e:
