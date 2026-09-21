@@ -1,5 +1,5 @@
 """I2: _behavior_watch (Sunday inbox behavior-watch Telegram push) must be
-gated on BRIEF_OWNER_IS_VPS, same as the other Telegram push lanes
+gated on is_brief_owner(), same as the other Telegram push lanes
 (_daily_proposals, email_digest) — without the gate both Mac and VPS would
 send the Sunday message.
 
@@ -32,12 +32,12 @@ def _function_body(name: str) -> str:
 
 def test_behavior_watch_gated_on_brief_owner_is_vps():
     body = _function_body("_behavior_watch")
-    assert "BRIEF_OWNER_IS_VPS" in body, (
-        "_behavior_watch has no BRIEF_OWNER_IS_VPS gate — both Mac and VPS "
+    assert "is_brief_owner()" in body, (
+        "_behavior_watch has no is_brief_owner() gate — both Mac and VPS "
         "would send the Sunday behavior-watch Telegram message"
     )
     # The gate must come before the Sunday weekday check / send, not after.
-    gate_pos = body.index("BRIEF_OWNER_IS_VPS")
+    gate_pos = body.index("is_brief_owner()")
     send_pos = body.index("telegram_bot.send_message_sync")
     assert gate_pos < send_pos
 

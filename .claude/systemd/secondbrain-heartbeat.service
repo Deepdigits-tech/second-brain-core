@@ -9,5 +9,9 @@ ExecStart={{PYTHON}} {{REPO_ROOT}}/.claude/scripts/heartbeat.py
 Environment=PATH={{PATH}}
 EnvironmentFile={{ENV_FILE}}
 Environment=CLAUDE_INVOKED_BY=heartbeat
+# Slightly above HEARTBEAT_MODEL_TIMEOUT_S (900s) in heartbeat.py, so the
+# unit's own timeout is never what cuts off a model call that is still
+# within its own budget.
+TimeoutStartSec=1500
 StandardOutput=journal
 StandardError=journal

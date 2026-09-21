@@ -38,6 +38,15 @@ THROTTLE_STATE_PATH = STATE_DIR / "heartbeat-throttle.json"
 HEALTH_ALERT_STATE_PATH = STATE_DIR / "health-alert-state.json"
 ACTIVE_HOURS = (6, 22)  # 6 AM – 10 PM PST — outside this the heartbeat does nothing
 
+# The main SDK call had no overall timeout: a hung CLI child blocked
+# `async for msg in query(...)` forever, the systemd unit is Type=oneshot
+# with no TimeoutStartSec, and the next timer tick never fires because the
+# previous run is still "running". 900s (15 min) is well above a normal tick
+# (the model call is a handful of turns, seconds to low minutes) and well
+# under the 30-min tick interval, so a timeout still leaves room for the
+# rest of main() to finish before the next tick would overlap it.
+HEARTBEAT_MODEL_TIMEOUT_S = 900
+
 # The owner's working day (7 AM – 9 PM, every day). Inside it the heartbeat keeps
 # its 30-minute cadence; outside it drops to hourly. The launchd job still
 # fires every 30 min — the tick is skipped in code, so the schedule lives in
@@ -53,6 +62,24 @@ OFF_HOURS_GAP_MINUTES = 55  # under 60 so clock drift can't skip an hour entirel
 # race to lose: the VPS is always on, so it owns the outbound lanes. Same
 # split already used for capture.email_poll (VPS) and invest.alerts (Mac).
 BRIEF_OWNER_IS_VPS = sys.platform != "darwin"
+
+
+def is_brief_owner() -> bool:
+    """Whether THIS machine owns briefs/push lanes right now.
+
+    CORTEX_BRIEF_OWNER overrides the platform rule — same idiom used
+    elsewhere for machine-ownership overrides: '1' forces this machine to
+    own briefs/pings, '0' forces it off, unset keeps BRIEF_OWNER_IS_VPS. Lets
+    a backup machine take over when the usual owner's heartbeat is down,
+    with no code edit — set CORTEX_BRIEF_OWNER=1 there and 0 on the other.
+    Setting both machines to '1' at once duplicates every brief and push
+    lane.
+    """
+    override = os.environ.get("CORTEX_BRIEF_OWNER")
+    if override is not None:
+        return override.strip() == "1"
+    return BRIEF_OWNER_IS_VPS
+
 
 DEBUG_LOG = "/tmp/cortex_hook_debug.log"
 ERROR_LOG_PATH = DATA_DIR / "heartbeat_errors.log"
@@ -2789,10 +2816,10 @@ def main():
         # local file keeps its once-per-day guard; the non-owner never claims,
         # so it can neither send a duplicate nor claim a brief it won't write.
         morning_brief_today = (
-            BRIEF_OWNER_IS_VPS and is_first_run_of_day() and _claim_brief("morning")
+            is_brief_owner() and is_first_run_of_day() and _claim_brief("morning")
         )
         afternoon_brief_today = (
-            BRIEF_OWNER_IS_VPS and is_first_run_of_afternoon() and _claim_brief("afternoon")
+            is_brief_owner() and is_first_run_of_afternoon() and _claim_brief("afternoon")
         )
         if morning_brief_today:
             curr_snapshot["last_morning_brief_date"] = today_pst_str
@@ -2875,7 +2902,7 @@ def main():
 
             # 8a. Inbox: daily proposal push (supervised training loop)
             def _daily_proposals():
-                if not BRIEF_OWNER_IS_VPS:
+                if not is_brief_owner():
                     return
                 today = datetime.now(PST).strftime("%Y-%m-%d")
                 if curr_snapshot.get("last_proposal_date") == today:
@@ -2900,7 +2927,7 @@ def main():
             # Gated on triage_on: with triage off the book/actions log go stale
             # and this step is noise.
             def _behavior_watch():
-                if not BRIEF_OWNER_IS_VPS:
+                if not is_brief_owner():
                     return {"sent": False}
                 if datetime.now(PST).weekday() != 6:
                     return {"sent": False}
@@ -2924,8 +2951,8 @@ def main():
         # 8d. Email digest: 2x daily push (noon + 8 PM) across all Gmail tabs
         # for both accounts. Cross-machine dedup via brief_coord.
         def _email_digest():
-            if not BRIEF_OWNER_IS_VPS:
-                return  # VPS owns the digest lane; see BRIEF_OWNER_IS_VPS
+            if not is_brief_owner():
+                return  # the brief owner owns the digest lane; see is_brief_owner()
             from email_digest import run_if_due as _email_digest_if_due
             fired = _email_digest_if_due()
             if fired:
@@ -2974,14 +3001,55 @@ def main():
             return
         guardrail_warning = gate.get("warning")
 
-        # 9. Run Agent SDK (with inbox triage context)
-        response_texts = asyncio.run(run_heartbeat(
-            data, diff, classify_result, auto_counts, health_report,
-            morning_brief=morning_brief_today,
-            afternoon_brief=afternoon_brief_today,
-            last_practice_offered=curr_snapshot.get("last_practice_offered"),
-            guardrail_warning=guardrail_warning,
-        ))
+        # 9. Run Agent SDK (with inbox triage context). Wrapped in feature_run
+        # under its own name so feature_health.py — the watcher that already
+        # reads every other lane's failure streak — can also see this one
+        # fail repeatedly; it previously ran outside every feature gate and
+        # was invisible to it. The real (possibly empty) response_texts is
+        # always recovered from `_model_holder` regardless of a raise, so
+        # nothing downstream changes behaviour — the raise only feeds
+        # feature_run's failure counter.
+        _model_holder: dict = {}
+
+        def _run_model_call_step():
+            async def _call_with_timeout():
+                try:
+                    return await asyncio.wait_for(
+                        run_heartbeat(
+                            data, diff, classify_result, auto_counts, health_report,
+                            morning_brief=morning_brief_today,
+                            afternoon_brief=afternoon_brief_today,
+                            last_practice_offered=curr_snapshot.get("last_practice_offered"),
+                            guardrail_warning=guardrail_warning,
+                        ),
+                        timeout=HEARTBEAT_MODEL_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError:
+                    # asyncio.wait_for cancels the inner coroutine at its
+                    # current await point; the SDK's own query()/Query.close()
+                    # runs in a try/finally around `async for msg in query(...)`,
+                    # which the raised CancelledError triggers on its way out
+                    # — that finally closes the transport, which terminates
+                    # (then kills) the CLI subprocess. No child process is
+                    # left running.
+                    debug(f"run_heartbeat timed out after {HEARTBEAT_MODEL_TIMEOUT_S}s")
+                    return []
+
+            texts = asyncio.run(_call_with_timeout())
+            _model_holder["response_texts"] = texts
+            if not texts:
+                # This raise only makes feature_run count the tick as
+                # `error` for feature_health; the real (empty) result still
+                # comes back from _model_holder, so downstream handling of
+                # "the model had nothing to say" is unchanged.
+                raise RuntimeError("heartbeat model call timed out, failed, or returned nothing")
+            return texts
+
+        response_texts = feature_run(
+            "heartbeat.model_call", _run_model_call_step, log=debug, default=[],
+        )
+        if "response_texts" in _model_holder:
+            response_texts = _model_holder["response_texts"]
 
         # 9b. Parse TASK_PROPOSAL lines from model output
         def _parse_task_proposals():
@@ -3037,16 +3105,32 @@ def main():
         if lane_available("tasks"):
             feature_run("tasks.parse_proposals", _parse_task_proposals, log=debug)
 
-        # 10. Parse and send notifications
+        # 10. Parse and send notifications. Wrapped in feature_run under its
+        # own name, same reasoning as heartbeat.model_call above — dispatch
+        # used to run outside every feature gate, invisible to
+        # feature_health.py. A failed brief send raises (after storing the
+        # real result in `_notif_holder`) so it counts as `error`; a tick
+        # with nothing to send is simply not run at all (no false "error").
         if response_texts:
-            notif_result = parse_and_send_notifications(response_texts)
+            _notif_holder: dict = {}
+
+            def _run_notify_dispatch_step():
+                result = parse_and_send_notifications(response_texts)
+                _notif_holder["result"] = result
+                if result.get("brief_send_failed"):
+                    raise RuntimeError(
+                        f"{result['brief_send_failed']} brief send failed"
+                    )
+                return result
+
+            feature_run("heartbeat.notify_dispatch", _run_notify_dispatch_step, log=debug, default={})
+            notif_result = _notif_holder.get("result", {})
             parse_and_apply_classifications(response_texts, classify_result)
 
             # The brief was claimed above (before the model even ran, since it
             # has to know whether to ask for one), but its actual Telegram/macOS
             # send just failed — release the claim so the next tick retries
-            # instead of finding today's brief marked done with nothing sent
-            # (2026-09-20).
+            # instead of finding today's brief marked done with nothing sent.
             brief_kind_failed = notif_result.get("brief_send_failed")
             if brief_kind_failed:
                 _rollback_brief_claims(
@@ -3089,11 +3173,22 @@ def main():
         _refresh_dashboard_snapshot(events=data.get("gcal"))
 
         debug("heartbeat complete")
+        return True
     except Exception:
         tb = traceback.format_exc()
         debug(f"heartbeat failed: {tb}")
         log_error(f"Heartbeat failed:\n{tb}")
+        # This used to fall off the end (implicit `return None`) and main()
+        # always exited 0, so systemd/launchd saw "success" even when the
+        # whole tick blew up before doing anything. Every OTHER return in
+        # main() (outside active hours, off-hours cadence skip, the
+        # nothing-changed early exit) is a bare `return` too — those stay
+        # None on purpose and must NOT become a failure exit, so the
+        # `__main__` guard below checks for `is False` specifically, not
+        # falsiness (None is falsy in Python and would otherwise exit 1 for
+        # every ordinary quiet tick).
+        return False
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(1 if main() is False else 0)
