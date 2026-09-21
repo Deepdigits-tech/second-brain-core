@@ -1,9 +1,15 @@
-claude-agent-sdk
+# Pinned: 0.1.56 bundles its own CLI. Newer claude-agent-sdk releases bundle a
+# newer CLI too, and an older bundled CLI has been observed intermittently
+# rejecting requests with a bodyless 400 error before the model even sees them.
+# Pin here and select the highest-versioned CLI available on the machine at
+# call time (see sdk_cli.py) rather than trusting whatever the SDK bundles.
+claude-agent-sdk==0.1.56
 openai
 fastembed
 sqlite-vec
 python-telegram-bot
 slack-sdk
+slack-bolt
 pyyaml
 python-dotenv
 composio==0.11.5
