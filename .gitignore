@@ -24,6 +24,6 @@ node_modules/
 .claude/data/hook-blocks.jsonl
 .claude/data/sdk_stderr.log
 
-# Vault: personal content, never shipped as part of this template repo.
-vault/daily/
-vault/research/
+# Vault: the template ships an empty skeleton. Notes added in your own (private)
+# clone should be tracked in git so they sync between your machines and appear
+# in the memory index. After cloning, populate vault/ with your own content.
