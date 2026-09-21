@@ -11,6 +11,15 @@ node_modules/
 
 # Machine-local state and databases — rebuilt on each machine, never synced.
 .claude/data/state/*.json
+# vault_sync.sh's own bookkeeping — never auto-committed by the sync it belongs to.
+.claude/data/state/sync-failures.txt
+.claude/data/state/sync-held-commit.txt
+.claude/data/state/sync-paused-branch.txt
+.claude/data/state/sync.lock/
+.claude/data/state/sync-started-rebase.txt
+.claude/data/state/sync-human-op-notified.txt
+.claude/data/state/sync-retained-stash.txt
+.claude/data/state/sync-conflicts/
 .claude/data/memory.db
 .claude/data/memory.db-*
 .claude/data/chat.db
